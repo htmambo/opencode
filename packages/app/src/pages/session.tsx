@@ -90,6 +90,7 @@ interface SessionReviewTabProps {
   comments?: LineComment[]
   focusedComment?: { file: string; id: string } | null
   onFocusedCommentChange?: (focus: { file: string; id: string } | null) => void
+  focusedFile?: string
   onScrollRef?: (el: HTMLDivElement) => void
   classes?: {
     root?: string
@@ -1995,6 +1996,7 @@ export default function Page() {
                                 diffs={diffs}
                                 view={view}
                                 diffStyle="unified"
+                                focusedFile={activeDiff()}
                                 onLineComment={(comment) => addCommentToContext({ ...comment, origin: "review" })}
                                 comments={comments.all()}
                                 focusedComment={comments.focus()}
