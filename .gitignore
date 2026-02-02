@@ -32,3 +32,7 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+script/opencode-backend.pid
+script/opencode-web.pid
+**/.ace-tool
+**/.claude

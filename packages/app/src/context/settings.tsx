@@ -42,9 +42,8 @@ export interface Settings {
   }
   appearance: {
     fontSize: number
-    mono: string
-    sans: string
-    terminal: string
+    fontScale: number
+    font: string
   }
   keybinds: Record<string, string>
   permissions: {
@@ -198,9 +197,8 @@ const defaultSettings: Settings = {
   },
   appearance: {
     fontSize: 14,
-    mono: "",
-    sans: "",
-    terminal: "",
+    fontScale: 1,
+    font: "ibm-plex-mono",
   },
   keybinds: {},
   permissions: {
@@ -221,8 +219,28 @@ const defaultSettings: Settings = {
   },
 }
 
-function withFallback<T>(read: () => T | undefined, fallback: T) {
-  return createMemo(() => read() ?? fallback)
+const monoFallback =
+  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+
+const clampScale = (value: number) => Math.min(1.5, Math.max(0.85, value))
+
+const monoFonts: Record<string, string> = {
+  "ibm-plex-mono": `"IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "cascadia-code": `"Cascadia Code Nerd Font", "Cascadia Code NF", "Cascadia Mono NF", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "fira-code": `"Fira Code Nerd Font", "FiraMono Nerd Font", "FiraMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  hack: `"Hack Nerd Font", "Hack Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  inconsolata: `"Inconsolata Nerd Font", "Inconsolata Nerd Font Mono","IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "intel-one-mono": `"Intel One Mono Nerd Font", "IntoneMono Nerd Font", "IntoneMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  iosevka: `"Iosevka Nerd Font", "Iosevka Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "jetbrains-mono": `"JetBrains Mono Nerd Font", "JetBrainsMono Nerd Font Mono", "JetBrainsMonoNL Nerd Font", "JetBrainsMonoNL Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "meslo-lgs": `"Meslo LGS Nerd Font", "MesloLGS Nerd Font", "MesloLGM Nerd Font", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "roboto-mono": `"Roboto Mono Nerd Font", "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "source-code-pro": `"Source Code Pro Nerd Font", "SauceCodePro Nerd Font", "SauceCodePro Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+  "ubuntu-mono": `"Ubuntu Mono Nerd Font", "UbuntuMono Nerd Font", "UbuntuMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
+}
+
+export function monoFontFamily(font: string | undefined) {
+  return monoFonts[font ?? defaultSettings.appearance.font] ?? monoFonts[defaultSettings.appearance.font]
 }
 
 export const { use: useSettings, provider: SettingsProvider } = createSimpleContext({
@@ -355,6 +373,16 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       setStore("general", "followup", "steer")
     })
 
+    createEffect(() => {
+      if (typeof document === "undefined") return
+      const scale = clampScale(store.appearance?.fontScale ?? defaultSettings.appearance.fontScale)
+      document.documentElement.style.setProperty("--font-scale", scale.toString())
+      document.documentElement.style.setProperty("--font-size-small", `${13 * scale}px`)
+      document.documentElement.style.setProperty("--font-size-base", `${14 * scale}px`)
+      document.documentElement.style.setProperty("--font-size-large", `${16 * scale}px`)
+      document.documentElement.style.setProperty("--font-size-x-large", `${20 * scale}px`)
+    })
+
     return {
       ready,
       get current() {
@@ -463,7 +491,11 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setFontSize(value: number) {
           setStore("appearance", "fontSize", value)
         },
-        font: withFallback(() => store.appearance?.mono, defaultSettings.appearance.mono),
+        fontScale: createMemo(() => store.appearance?.fontScale ?? defaultSettings.appearance.fontScale),
+        setFontScale(value: number) {
+          setStore("appearance", "fontScale", clampScale(value))
+        },
+        font: createMemo(() => store.appearance?.font ?? defaultSettings.appearance.font),
         setFont(value: string) {
           setStore("appearance", "mono", value.trim() ? value : "")
         },

@@ -760,7 +760,51 @@ export const SettingsGeneral: Component = () => {
 
         <AppearanceSection />
 
-        <NotificationsSection />
+            <SettingsRow
+              title={language.t("settings.general.row.font.title")}
+              description={language.t("settings.general.row.font.description")}
+            >
+              <Select
+                data-action="settings-font"
+                options={fontOptionsList}
+                current={fontOptionsList.find((o) => o.value === settings.appearance.font())}
+                value={(o) => o.value}
+                label={(o) => language.t(o.label)}
+                onSelect={(option) => option && settings.appearance.setFont(option.value)}
+                variant="secondary"
+                size="small"
+                triggerVariant="settings"
+                triggerStyle={{ "font-family": monoFontFamily(settings.appearance.font()), "field-sizing": "content" }}
+              >
+                {(option) => (
+                  <span style={{ "font-family": monoFontFamily(option?.value) }}>
+                    {option ? language.t(option.label) : ""}
+                  </span>
+                )}
+              </Select>
+            </SettingsRow>
+
+            <SettingsRow
+              title="字号缩放"
+              description="调整文字缩放比例"
+            >
+              <div class="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="0.85"
+                  max="1.5"
+                  step="0.05"
+                  value={settings.appearance.fontScale()}
+                  onInput={(event) => settings.appearance.setFontScale(Number(event.currentTarget.value))}
+                  class="w-40"
+                />
+                <span class="text-12-regular text-text-weak w-12 text-right">
+                  {Math.round(settings.appearance.fontScale() * 100)}%
+                </span>
+              </div>
+            </SettingsRow>
+          </div>
+        </div>
 
         <SoundsSection />
 

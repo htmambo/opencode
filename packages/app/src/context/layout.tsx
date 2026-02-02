@@ -286,12 +286,14 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
           panelOpened: DEFAULT_REVIEW_PANEL_OPENED,
         },
         fileTree: {
-          opened: false,
-          width: DEFAULT_FILE_TREE_WIDTH,
+          opened: true,
+          width: 344,
+          cycle: 0,
           tab: "changes" as "changes" | "all",
         },
         session: {
-          width: DEFAULT_SESSION_WIDTH,
+          width: 600,
+          panel: true,
         },
         mobileSidebar: {
           opened: false,
@@ -703,52 +705,75 @@ export const { use: useLayout, provider: LayoutProvider } = createSimpleContext(
       },
       fileTree: {
         opened: createMemo(() => store.fileTree?.opened ?? true),
-        width: createMemo(() => store.fileTree?.width ?? DEFAULT_FILE_TREE_WIDTH),
+        width: createMemo(() => store.fileTree?.width ?? 344),
+        cycle: createMemo(() => store.fileTree?.cycle ?? 0),
         tab: createMemo(() => store.fileTree?.tab ?? "changes"),
         setTab(tab: "changes" | "all") {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab })
+            setStore("fileTree", { opened: true, width: 344, cycle: 0, tab })
             return
           }
           setStore("fileTree", "tab", tab)
         },
         open() {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab: "changes" })
+            setStore("fileTree", { opened: true, width: 344, cycle: 0, tab: "changes" })
             return
           }
           setStore("fileTree", "opened", true)
         },
         close() {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: false, width: DEFAULT_FILE_TREE_WIDTH, tab: "changes" })
+            setStore("fileTree", { opened: false, width: 344, cycle: 0, tab: "changes" })
             return
           }
           setStore("fileTree", "opened", false)
         },
         toggle() {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: true, width: DEFAULT_FILE_TREE_WIDTH, tab: "changes" })
+            setStore("fileTree", { opened: true, width: 344, cycle: 0, tab: "changes" })
             return
           }
           setStore("fileTree", "opened", (x) => !x)
         },
+        setCycle(cycle: number) {
+          if (!store.fileTree) {
+            setStore("fileTree", { opened: true, width: 344, cycle, tab: "changes" })
+            return
+          }
+          setStore("fileTree", "cycle", cycle)
+        },
         resize(width: number) {
           if (!store.fileTree) {
-            setStore("fileTree", { opened: true, width, tab: "changes" })
+            setStore("fileTree", { opened: true, width, cycle: 0, tab: "changes" })
             return
           }
           setStore("fileTree", "width", width)
         },
       },
       session: {
-        width: createMemo(() => store.session?.width ?? DEFAULT_SESSION_WIDTH),
+        width: createMemo(() => store.session?.width ?? 600),
+        panel: createMemo(() => store.session?.panel ?? true),
         resize(width: number) {
           if (!store.session) {
-            setStore("session", { width })
+            setStore("session", { width, panel: true })
             return
           }
           setStore("session", "width", width)
+        },
+        showPanel() {
+          if (!store.session) {
+            setStore("session", { width: 600, panel: true })
+            return
+          }
+          setStore("session", "panel", true)
+        },
+        hidePanel() {
+          if (!store.session) {
+            setStore("session", { width: 600, panel: false })
+            return
+          }
+          setStore("session", "panel", false)
         },
       },
       mobileSidebar: {

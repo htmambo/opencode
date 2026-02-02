@@ -166,8 +166,33 @@ export function SessionHeader() {
   const status = settings.visibility.status
   const isDesktop = createMediaQuery("(min-width: 768px)")
 
-  const [exists, setExists] = createStore<Partial<Record<OpenApp, boolean>>>({
-    finder: true,
+  const currentSession = createMemo(() => sync.data.session.find((s) => s.id === params.id))
+  const shareEnabled = createMemo(() => sync.data.config.share !== "disabled")
+  const showShare = createMemo(() => shareEnabled() && !!currentSession())
+  const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
+  const view = createMemo(() => layout.view(sessionKey))
+
+  function cycleFileTree() {
+    const cycle = layout.fileTree.cycle()
+    if (cycle === 0) {
+      layout.fileTree.toggle()
+      layout.fileTree.setCycle(1)
+      return
+    }
+    if (cycle === 1) {
+      layout.session.hidePanel()
+      layout.fileTree.setCycle(2)
+      return
+    }
+    layout.session.showPanel()
+    layout.fileTree.setCycle(0)
+  }
+
+  const [state, setState] = createStore({
+    share: false,
+    unshare: false,
+    copied: false,
+    timer: undefined as number | undefined,
   })
 
   const apps = createMemo(() => {
@@ -505,10 +530,80 @@ export function SessionHeader() {
                     </div>
                   </div>
                 </div>
-              }
-            >
-              <SessionHeaderV2Actions state={v2ActionsState()} />
-            </Show>
+              </Show>
+              <div class="hidden md:flex items-center gap-3 ml-2 shrink-0">
+                <TooltipKeybind
+                  title={language.t("command.terminal.toggle")}
+                  keybind={command.keybind("terminal.toggle")}
+                >
+                  <Button
+                    variant="ghost"
+                    class="group/terminal-toggle size-6 p-0"
+                    onClick={() => view().terminal.toggle()}
+                    aria-label={language.t("command.terminal.toggle")}
+                    aria-expanded={view().terminal.opened()}
+                    aria-controls="terminal-panel"
+                  >
+                    <div class="relative flex items-center justify-center size-4 [&>*]:absolute [&>*]:inset-0">
+                      <Icon
+                        size="small"
+                        name={view().terminal.opened() ? "layout-bottom-full" : "layout-bottom"}
+                        class="group-hover/terminal-toggle:hidden"
+                      />
+                      <Icon
+                        size="small"
+                        name="layout-bottom-partial"
+                        class="hidden group-hover/terminal-toggle:inline-block"
+                      />
+                      <Icon
+                        size="small"
+                        name={view().terminal.opened() ? "layout-bottom" : "layout-bottom-full"}
+                        class="hidden group-active/terminal-toggle:inline-block"
+                      />
+                    </div>
+                  </Button>
+                </TooltipKeybind>
+              </div>
+              <div class="hidden md:block shrink-0">
+                <TooltipKeybind title={language.t("command.review.toggle")} keybind={command.keybind("review.toggle")}>
+                  <Button
+                    variant="ghost"
+                    class="group/file-tree-toggle size-6 p-0"
+                    onClick={cycleFileTree}
+                    aria-label={language.t("command.review.toggle")}
+                    aria-expanded={layout.fileTree.opened()}
+                    aria-controls="review-panel"
+                  >
+                    <div class="relative flex items-center justify-center size-4 [&>*]:absolute [&>*]:inset-0">
+                      <Show
+                        when={!layout.session.panel()}
+                        fallback={
+                          <>
+                            <Icon
+                              size="small"
+                              name={layout.fileTree.opened() ? "layout-right-full" : "layout-right"}
+                              class="group-hover/file-tree-toggle:hidden"
+                            />
+                            <Icon
+                              size="small"
+                              name="layout-right-partial"
+                              class="hidden group-hover/file-tree-toggle:inline-block"
+                            />
+                            <Icon
+                              size="small"
+                              name={layout.fileTree.opened() ? "layout-right" : "layout-right-full"}
+                              class="hidden group-active/file-tree-toggle:inline-block"
+                            />
+                          </>
+                        }
+                      >
+                        <Icon size="small" name="square-outline" />
+                      </Show>
+                    </div>
+                  </Button>
+                </TooltipKeybind>
+              </div>
+            </div>
           </Portal>
         )}
       </Show>
