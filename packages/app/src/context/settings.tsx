@@ -25,6 +25,7 @@ export interface Settings {
   }
   appearance: {
     fontSize: number
+    fontScale: number
     font: string
   }
   keybinds: Record<string, string>
@@ -45,6 +46,7 @@ const defaultSettings: Settings = {
   },
   appearance: {
     fontSize: 14,
+    fontScale: 1,
     font: "ibm-plex-mono",
   },
   keybinds: {},
@@ -65,6 +67,8 @@ const defaultSettings: Settings = {
 
 const monoFallback =
   'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+
+const clampScale = (value: number) => Math.min(1.5, Math.max(0.85, value))
 
 const monoFonts: Record<string, string> = {
   "ibm-plex-mono": `"IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
@@ -95,6 +99,16 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       document.documentElement.style.setProperty("--font-family-mono", monoFontFamily(store.appearance?.font))
     })
 
+    createEffect(() => {
+      if (typeof document === "undefined") return
+      const scale = clampScale(store.appearance?.fontScale ?? defaultSettings.appearance.fontScale)
+      document.documentElement.style.setProperty("--font-scale", scale.toString())
+      document.documentElement.style.setProperty("--font-size-small", `${13 * scale}px`)
+      document.documentElement.style.setProperty("--font-size-base", `${14 * scale}px`)
+      document.documentElement.style.setProperty("--font-size-large", `${16 * scale}px`)
+      document.documentElement.style.setProperty("--font-size-x-large", `${20 * scale}px`)
+    })
+
     return {
       ready,
       get current() {
@@ -120,6 +134,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         fontSize: createMemo(() => store.appearance?.fontSize ?? defaultSettings.appearance.fontSize),
         setFontSize(value: number) {
           setStore("appearance", "fontSize", value)
+        },
+        fontScale: createMemo(() => store.appearance?.fontScale ?? defaultSettings.appearance.fontScale),
+        setFontScale(value: number) {
+          setStore("appearance", "fontScale", clampScale(value))
         },
         font: createMemo(() => store.appearance?.font ?? defaultSettings.appearance.font),
         setFont(value: string) {

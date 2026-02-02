@@ -38,6 +38,7 @@ import type { DragEvent } from "@thisbeyond/solid-dnd"
 import { useSync } from "@/context/sync"
 import { useTerminal, type LocalPTY } from "@/context/terminal"
 import { useLayout } from "@/context/layout"
+import { usePlatform } from "@/context/platform"
 import { Terminal } from "@/components/terminal"
 import { checksum, base64Encode } from "@opencode-ai/util/encode"
 import { findLast } from "@opencode-ai/util/array"
@@ -51,7 +52,7 @@ import { useCommand } from "@/context/command"
 import { useLanguage } from "@/context/language"
 import { useNavigate, useParams } from "@solidjs/router"
 import { UserMessage } from "@opencode-ai/sdk/v2"
-import type { FileDiff } from "@opencode-ai/sdk/v2/client"
+import type { FileDiff, Message, Part, Session } from "@opencode-ai/sdk/v2/client"
 import { useSDK } from "@/context/sdk"
 import { usePrompt } from "@/context/prompt"
 import { useComments, type LineComment } from "@/context/comments"
@@ -89,7 +90,6 @@ interface SessionReviewTabProps {
   comments?: LineComment[]
   focusedComment?: { file: string; id: string } | null
   onFocusedCommentChange?: (focus: { file: string; id: string } | null) => void
-  focusedFile?: string
   onScrollRef?: (el: HTMLDivElement) => void
   classes?: {
     root?: string
@@ -240,6 +240,7 @@ export default function Page() {
   const prompt = usePrompt()
   const comments = useComments()
   const permission = usePermission()
+  const platform = usePlatform()
 
   const request = createMemo(() => {
     const sessionID = params.id
@@ -282,6 +283,7 @@ export default function Page() {
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   const tabs = createMemo(() => layout.tabs(sessionKey))
   const view = createMemo(() => layout.view(sessionKey))
+  const showTabs = createMemo(() => view().review.open())
 
   if (import.meta.env.DEV) {
     createEffect(
@@ -671,6 +673,177 @@ export default function Page() {
     })
   }
 
+  const errorMessage = (err: unknown) => {
+    if (err && typeof err === "object" && "data" in err) {
+      const data = (err as { data?: { message?: string } }).data
+      if (data?.message) return data.message
+    }
+    if (err instanceof Error) return err.message
+    return "Request failed"
+  }
+
+  const downloadJson = (payload: unknown, filename: string) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportSession = async () => {
+    const sessionID = params.id
+    if (!sessionID) return
+
+    const fallbackInfo = info()
+    const [sessionInfo, remoteMessages] = await Promise.all([
+      sdk.client.session
+        .get({ sessionID })
+        .then((res) => res.data ?? fallbackInfo)
+        .catch(() => fallbackInfo),
+      sdk.client.session
+        .messages({ sessionID, limit: 10_000 })
+        .then((res) => res.data ?? [])
+        .catch(() => undefined),
+    ])
+
+    if (!sessionInfo) {
+      showToast({
+        title: "Session export failed",
+        description: "Session data is not available",
+        variant: "error",
+      })
+      return
+    }
+
+    const messagesData =
+      remoteMessages ??
+      messages().map((message) => ({
+        info: message,
+        parts: sync.data.part[message.id] ?? ([] as Part[]),
+      }))
+
+    const payload = {
+      info: sessionInfo,
+      messages: messagesData.map((message) => ({
+        info: message.info,
+        parts: message.parts,
+      })),
+    }
+
+    downloadJson(payload, `session-${sessionID}.json`)
+    showToast({
+      title: "Session exported",
+      description: `Downloaded session-${sessionID}.json`,
+      variant: "success",
+    })
+  }
+
+  const selectImportFile = () =>
+    new Promise<File | undefined>((resolve) => {
+      const state = { resolved: false }
+      const input = document.createElement("input")
+      input.type = "file"
+      input.accept = "application/json"
+      input.onchange = () => {
+        const file = input.files?.[0]
+        input.remove()
+        state.resolved = true
+        resolve(file)
+      }
+      input.onblur = () => {
+        if (state.resolved) return
+        input.remove()
+        resolve(undefined)
+      }
+      input.click()
+    })
+
+  const parseSessionImport = (raw: string) => {
+    try {
+      const parsed = JSON.parse(raw) as { info?: Session; messages?: { info: Message; parts: Part[] }[] }
+      if (!parsed.info || !Array.isArray(parsed.messages)) return undefined
+      return parsed
+    } catch (err) {
+      return undefined
+    }
+  }
+
+  const importSession = async () => {
+    const file = await selectImportFile()
+    if (!file) return
+
+    const raw = await file.text().catch(() => undefined)
+    if (!raw) {
+      showToast({
+        title: "Session import failed",
+        description: "Unable to read the selected file",
+        variant: "error",
+      })
+      return
+    }
+
+    const payload = parseSessionImport(raw)
+    if (!payload) {
+      showToast({
+        title: "Session import failed",
+        description: "Invalid session JSON format",
+        variant: "error",
+      })
+      return
+    }
+
+    const request = platform.fetch ?? fetch
+    const encodedDirectory = /[^\x00-\x7F]/.test(sdk.directory) ? encodeURIComponent(sdk.directory) : sdk.directory
+    const endpoint = new URL("/session/import", sdk.url).toString()
+    const response = await request(endpoint, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-opencode-directory": encodedDirectory,
+      },
+      body: JSON.stringify(payload),
+    }).catch((err) => {
+      showToast({
+        title: "Session import failed",
+        description: errorMessage(err),
+        variant: "error",
+      })
+      return undefined
+    })
+
+    if (!response) return
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => "")
+      showToast({
+        title: "Session import failed",
+        description: text || "Import request failed",
+        variant: "error",
+      })
+      return
+    }
+
+    const result = await response.json().catch(() => undefined)
+    const id = result?.id
+    if (!id || typeof id !== "string") {
+      showToast({
+        title: "Session import failed",
+        description: "Import response did not include a session id",
+        variant: "error",
+      })
+      return
+    }
+
+    navigate(`/${params.dir}/session/${id}`)
+    showToast({
+      title: "Session imported",
+      description: "Navigated to the imported session",
+      variant: "success",
+    })
+  }
+
   command.register(() => [
     {
       id: "session.new",
@@ -939,6 +1112,25 @@ export default function Page() {
       slash: "fork",
       disabled: !params.id || visibleUserMessages().length === 0,
       onSelect: () => dialog.show(() => <DialogFork />),
+    },
+    {
+      id: "session.export",
+      title: "导出会话",
+      description: "下载当前会话的JSON文件",
+      category: "Session",
+      disabled: !params.id,
+      onSelect: () => {
+        void exportSession()
+      },
+    },
+    {
+      id: "session.import",
+      title: "导入会话",
+      description: "从JSON文件中导入会话",
+      category: "Session",
+      onSelect: () => {
+        void importSession()
+      },
     },
     ...(sync.data.config.share !== "disabled"
       ? [
@@ -1762,10 +1954,10 @@ export default function Page() {
           classList={{
             "@container relative shrink-0 flex flex-col min-h-0 h-full bg-background-stronger": true,
             "flex-1 pt-6 md:pt-3": true,
-            "md:flex-none": layout.fileTree.opened(),
+            "md:flex-none": layout.session.panel(),
           }}
           style={{
-            width: isDesktop() && layout.fileTree.opened() ? `${layout.session.width()}px` : "100%",
+            width: isDesktop() && layout.session.panel() ? `${layout.session.width()}px` : "100%",
             "--prompt-height": store.promptHeight ? `${store.promptHeight}px` : undefined,
           }}
         >
@@ -1791,7 +1983,6 @@ export default function Page() {
                                 diffs={diffs}
                                 view={view}
                                 diffStyle="unified"
-                                focusedFile={activeDiff()}
                                 onLineComment={(comment) => addCommentToContext({ ...comment, origin: "review" })}
                                 comments={comments.all()}
                                 focusedComment={comments.focus()}
@@ -1939,9 +2130,7 @@ export default function Page() {
                             classList={{
                               "sticky top-0 z-30 bg-background-stronger": true,
                               "w-full": true,
-                              "px-4 md:px-6": true,
-                              "md:max-w-200 md:mx-auto 3xl:max-w-[1200px] 3xl:mx-auto 4xl:max-w-[1600px] 4xl:mx-auto 5xl:max-w-[1900px] 5xl:mx-auto":
-                                centered(),
+                              "px-4 md:px-6": true
                             }}
                           >
                             <div class="h-10 flex items-center gap-1">
@@ -1966,11 +2155,9 @@ export default function Page() {
                         <div
                           ref={autoScroll.contentRef}
                           role="log"
-                          class="flex flex-col gap-32 items-start justify-start pb-[calc(var(--prompt-height,8rem)+64px)] md:pb-[calc(var(--prompt-height,10rem)+64px)] transition-[margin]"
+                          class="flex flex-col gap-6 items-start justify-start pb-[calc(var(--prompt-height,8rem)+64px)] md:pb-[calc(var(--prompt-height,10rem)+64px)] transition-[margin]"
                           classList={{
                             "w-full": true,
-                            "md:max-w-200 md:mx-auto 3xl:max-w-[1200px] 3xl:mx-auto 4xl:max-w-[1600px] 4xl:mx-auto 5xl:max-w-[1900px] 5xl:mx-auto":
-                              centered(),
                             "mt-0.5": centered(),
                             "mt-0": !centered(),
                           }}
@@ -2023,7 +2210,6 @@ export default function Page() {
                                   data-message-id={message.id}
                                   classList={{
                                     "min-w-0 w-full max-w-full": true,
-                                    "md:max-w-200 3xl:max-w-[1200px] 4xl:max-w-[1600px] 5xl:max-w-[1900px]": centered(),
                                   }}
                                 >
                                   <SessionTurn
@@ -2037,7 +2223,7 @@ export default function Page() {
                                     classes={{
                                       root: "min-w-0 w-full relative",
                                       content: "flex flex-col justify-between !overflow-visible",
-                                      container: "w-full px-4 md:px-6",
+                                      container: "w-full px-4 transition-all duration-300",
                                     }}
                                   />
                                 </div>
@@ -2080,7 +2266,6 @@ export default function Page() {
             <div
               classList={{
                 "w-full px-4 pointer-events-auto": true,
-                "md:max-w-200 3xl:max-w-[1200px] 4xl:max-w-[1600px] 5xl:max-w-[1900px]": centered(),
               }}
             >
               <Show when={request()} keyed>
@@ -2132,7 +2317,6 @@ export default function Page() {
                   </div>
                 )}
               </Show>
-
               <Show
                 when={prompt.ready()}
                 fallback={
@@ -2153,7 +2337,7 @@ export default function Page() {
             </div>
           </div>
 
-          <Show when={isDesktop() && layout.fileTree.opened()}>
+          <Show when={isDesktop() && layout.session.panel()}>
             <ResizeHandle
               direction="horizontal"
               size={layout.session.width()}
@@ -2165,7 +2349,7 @@ export default function Page() {
         </div>
 
         {/* Desktop side panel - hidden on mobile */}
-        <Show when={isDesktop() && layout.fileTree.opened()}>
+        <Show when={isDesktop() && layout.session.panel()}>
           <aside
             id="review-panel"
             aria-label={language.t("session.panel.reviewAndFiles")}
@@ -2288,7 +2472,6 @@ export default function Page() {
                           </StickyAddButton>
                         </Tabs.List>
                       </div>
-
                       <Tabs.Content value="empty" class="flex flex-col h-full overflow-hidden contain-strict">
                         <Show when={activeTab() === "empty"}>
                           <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
@@ -2838,7 +3021,46 @@ export default function Page() {
                   </DragDropProvider>
                 }
               >
-                {reviewPanel()}
+                <div class="flex flex-col h-full overflow-hidden bg-background-stronger contain-strict">
+                  <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
+                    <Switch>
+                      <Match when={hasReview()}>
+                        <Show
+                          when={diffsReady()}
+                          fallback={
+                            <div class="px-6 py-4 text-text-weak">{language.t("session.review.loadingChanges")}</div>
+                          }
+                        >
+                          <SessionReviewTab
+                            diffs={diffs}
+                            view={view}
+                            diffStyle={layout.review.diffStyle()}
+                            onDiffStyleChange={layout.review.setDiffStyle}
+                            onScrollRef={setReviewScroll}
+                            onLineComment={(comment) => addCommentToContext({ ...comment, origin: "review" })}
+                            comments={comments.all()}
+                            focusedComment={comments.focus()}
+                            onFocusedCommentChange={comments.setFocus}
+                            onViewFile={(path) => {
+                              showAllFiles()
+                              const value = file.tab(path)
+                              tabs().open(value)
+                              file.load(path)
+                            }}
+                          />
+                        </Show>
+                      </Match>
+                      <Match when={true}>
+                        <div class="h-full px-6 pb-30 flex flex-col items-center justify-center text-center gap-6">
+                          <Mark class="w-14 opacity-10" />
+                          <div class="text-14-regular text-text-weak max-w-56">
+                            {language.t("session.review.empty")}
+                          </div>
+                        </div>
+                      </Match>
+                    </Switch>
+                  </div>
+                </div>
               </Show>
             </div>
 

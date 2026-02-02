@@ -241,6 +241,26 @@ export const SettingsGeneral: Component = () => {
                 )}
               </Select>
             </SettingsRow>
+
+            <SettingsRow
+              title="字号缩放"
+              description="调整文字缩放比例"
+            >
+              <div class="flex items-center gap-3">
+                <input
+                  type="range"
+                  min="0.85"
+                  max="1.5"
+                  step="0.05"
+                  value={settings.appearance.fontScale()}
+                  onInput={(event) => settings.appearance.setFontScale(Number(event.currentTarget.value))}
+                  class="w-40"
+                />
+                <span class="text-12-regular text-text-weak w-12 text-right">
+                  {Math.round(settings.appearance.fontScale() * 100)}%
+                </span>
+              </div>
+            </SettingsRow>
           </div>
         </div>
 

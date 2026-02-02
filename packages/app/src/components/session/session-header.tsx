@@ -48,6 +48,22 @@ export function SessionHeader() {
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   const view = createMemo(() => layout.view(sessionKey))
 
+  function cycleFileTree() {
+    const cycle = layout.fileTree.cycle()
+    if (cycle === 0) {
+      layout.fileTree.toggle()
+      layout.fileTree.setCycle(1)
+      return
+    }
+    if (cycle === 1) {
+      layout.session.hidePanel()
+      layout.fileTree.setCycle(2)
+      return
+    }
+    layout.session.showPanel()
+    layout.fileTree.setCycle(0)
+  }
+
   const [state, setState] = createStore({
     share: false,
     unshare: false,
@@ -284,27 +300,36 @@ export function SessionHeader() {
                   <Button
                     variant="ghost"
                     class="group/file-tree-toggle size-6 p-0"
-                    onClick={() => layout.fileTree.toggle()}
+                    onClick={cycleFileTree}
                     aria-label={language.t("command.review.toggle")}
                     aria-expanded={layout.fileTree.opened()}
                     aria-controls="review-panel"
                   >
                     <div class="relative flex items-center justify-center size-4 [&>*]:absolute [&>*]:inset-0">
-                      <Icon
-                        size="small"
-                        name={layout.fileTree.opened() ? "layout-right-full" : "layout-right"}
-                        class="group-hover/file-tree-toggle:hidden"
-                      />
-                      <Icon
-                        size="small"
-                        name="layout-right-partial"
-                        class="hidden group-hover/file-tree-toggle:inline-block"
-                      />
-                      <Icon
-                        size="small"
-                        name={layout.fileTree.opened() ? "layout-right" : "layout-right-full"}
-                        class="hidden group-active/file-tree-toggle:inline-block"
-                      />
+                      <Show
+                        when={!layout.session.panel()}
+                        fallback={
+                          <>
+                            <Icon
+                              size="small"
+                              name={layout.fileTree.opened() ? "layout-right-full" : "layout-right"}
+                              class="group-hover/file-tree-toggle:hidden"
+                            />
+                            <Icon
+                              size="small"
+                              name="layout-right-partial"
+                              class="hidden group-hover/file-tree-toggle:inline-block"
+                            />
+                            <Icon
+                              size="small"
+                              name={layout.fileTree.opened() ? "layout-right" : "layout-right-full"}
+                              class="hidden group-active/file-tree-toggle:inline-block"
+                            />
+                          </>
+                        }
+                      >
+                        <Icon size="small" name="square-outline" />
+                      </Show>
                     </div>
                   </Button>
                 </TooltipKeybind>

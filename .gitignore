@@ -26,3 +26,8 @@ target
 opencode-dev
 logs/
 *.bun-build
+script/opencode-backend.pid
+script/opencode-web.pid
+**/.ace-tool
+**/.claude
+

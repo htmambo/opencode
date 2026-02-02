@@ -20,7 +20,7 @@ import { useLayout, getAvatarColors, LocalProject } from "@/context/layout"
 import { useGlobalSync } from "@/context/global-sync"
 import { Persist, persisted } from "@/utils/persist"
 import { base64Encode } from "@opencode-ai/util/encode"
-import { decode64 } from "@/utils/base64"
+import { decode64, decode64 as base64Decode } from "@/utils/base64"
 import { Avatar } from "@opencode-ai/ui/avatar"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Button } from "@opencode-ai/ui/button"
@@ -35,8 +35,9 @@ import { Collapsible } from "@opencode-ai/ui/collapsible"
 import { DiffChanges } from "@opencode-ai/ui/diff-changes"
 import { Spinner } from "@opencode-ai/ui/spinner"
 import { Dialog } from "@opencode-ai/ui/dialog"
+import { Switch as ToggleSwitch } from "@opencode-ai/ui/switch"
 import { getFilename } from "@opencode-ai/util/path"
-import { Session, type Message, type TextPart } from "@opencode-ai/sdk/v2/client"
+import { Session, type Message, type Part, type TextPart, type ToolPart } from "@opencode-ai/sdk/v2/client"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
 import { createStore, produce, reconcile } from "solid-js/store"
@@ -73,6 +74,9 @@ import { DialogEditProject } from "@/components/dialog-edit-project"
 import { Titlebar } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
+import { DateTime } from "luxon"
+
+type TaskRow = { label: string; value: string; valueClass?: string }
 
 export default function Layout(props: ParentProps) {
   const [store, setStore, , ready] = persisted(
@@ -237,6 +241,11 @@ export default function Layout(props: ParentProps) {
       if (!stopEvents()) return
       event.stopPropagation()
     }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return
+      event.preventDefault()
+      openEditor(props.id, props.value())
+    }
     const handleDblClick = (event: MouseEvent) => {
       if (!allowDblClick()) return
       stopPropagation(event)
@@ -247,16 +256,21 @@ export default function Layout(props: ParentProps) {
       <Show
         when={isEditing()}
         fallback={
-          <span
-            class={props.displayClass ?? props.class}
+          <button
+            type="button"
+            classList={{
+              "bg-transparent border-0 p-0 text-left": true,
+              [props.displayClass ?? props.class ?? ""]: !!(props.displayClass ?? props.class),
+            }}
             onDblClick={handleDblClick}
             onPointerDown={stopPropagation}
             onMouseDown={stopPropagation}
             onClick={stopPropagation}
             onTouchStart={stopPropagation}
+            onKeyDown={handleKeyDown}
           >
             {props.value()}
-          </span>
+          </button>
         }
       >
         <InlineInput
@@ -576,6 +590,7 @@ export default function Layout(props: ParentProps) {
         openProject(next.worktree, false)
         navigateToProject(next.worktree)
       },
+      { defer: true },
     ),
   )
 
@@ -886,52 +901,6 @@ export default function Layout(props: ParentProps) {
     queueMicrotask(() => scrollToSession(session.id, `${session.directory}:${session.id}`))
   }
 
-  function navigateSessionByUnseen(offset: number) {
-    const sessions = currentSessions()
-    if (sessions.length === 0) return
-
-    const hasUnseen = sessions.some((session) => notification.session.unseen(session.id).length > 0)
-    if (!hasUnseen) return
-
-    const activeIndex = params.id ? sessions.findIndex((s) => s.id === params.id) : -1
-    const start = activeIndex === -1 ? (offset > 0 ? -1 : 0) : activeIndex
-
-    for (let i = 1; i <= sessions.length; i++) {
-      const index = offset > 0 ? (start + i) % sessions.length : (start - i + sessions.length) % sessions.length
-      const session = sessions[index]
-      if (!session) continue
-      if (notification.session.unseen(session.id).length === 0) continue
-
-      prefetchSession(session, "high")
-
-      const next = sessions[(index + 1) % sessions.length]
-      const prev = sessions[(index - 1 + sessions.length) % sessions.length]
-
-      if (offset > 0) {
-        if (next) prefetchSession(next, "high")
-        if (prev) prefetchSession(prev)
-      }
-
-      if (offset < 0) {
-        if (prev) prefetchSession(prev, "high")
-        if (next) prefetchSession(next)
-      }
-
-      if (import.meta.env.DEV) {
-        navStart({
-          dir: base64Encode(session.directory),
-          from: params.id,
-          to: session.id,
-          trigger: offset > 0 ? "shift+alt+arrowdown" : "shift+alt+arrowup",
-        })
-      }
-
-      navigateToSession(session)
-      queueMicrotask(() => scrollToSession(session.id, `${session.directory}:${session.id}`))
-      return
-    }
-  }
-
   async function archiveSession(session: Session) {
     const [store, setStore] = globalSync.child(session.directory)
     const sessions = store.session ?? []
@@ -1069,20 +1038,6 @@ export default function Layout(props: ParentProps) {
         category: language.t("command.category.session"),
         keybind: "alt+arrowdown",
         onSelect: () => navigateSessionByOffset(1),
-      },
-      {
-        id: "session.previous.unseen",
-        title: language.t("command.session.previous.unseen"),
-        category: language.t("command.category.session"),
-        keybind: "shift+alt+arrowup",
-        onSelect: () => navigateSessionByUnseen(-1),
-      },
-      {
-        id: "session.next.unseen",
-        title: language.t("command.session.next.unseen"),
-        category: language.t("command.category.session"),
-        keybind: "shift+alt+arrowdown",
-        onSelect: () => navigateSessionByUnseen(1),
       },
       {
         id: "session.archive",
@@ -1307,6 +1262,53 @@ export default function Layout(props: ParentProps) {
     }
     if (err instanceof Error) return err.message
     return language.t("common.requestFailed")
+  }
+
+  const downloadJson = (payload: unknown, filename: string) => {
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const exportSession = async (session: Session) => {
+    const [sessionInfo, messagesData] = await Promise.all([
+      globalSDK.client.session
+        .get({ sessionID: session.id })
+        .then((res) => res.data)
+        .catch(() => undefined),
+      globalSDK.client.session
+        .messages({ directory: session.directory, sessionID: session.id, limit: 10_000 })
+        .then((res) => res.data ?? [])
+        .catch(() => []),
+    ])
+
+    if (!sessionInfo) {
+      showToast({
+        title: "Session export failed",
+        description: "Session data is not available",
+        variant: "error",
+      })
+      return
+    }
+
+    const payload = {
+      info: sessionInfo,
+      messages: messagesData.map((message) => ({
+        info: message.info,
+        parts: message.parts,
+      })),
+    }
+
+    downloadJson(payload, `session-${session.id}.json`)
+    showToast({
+      title: "Session exported",
+      description: `Downloaded session-${session.id}.json`,
+      variant: "success",
+    })
   }
 
   const deleteWorkspace = async (root: string, directory: string) => {
@@ -1960,6 +1962,9 @@ export default function Layout(props: ParentProps) {
                 <DropdownMenu.Item onSelect={() => archiveSession(props.session)}>
                   <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>
                 </DropdownMenu.Item>
+                <DropdownMenu.Item onSelect={() => exportSession(props.session)}>
+                  <DropdownMenu.ItemLabel>导出会话</DropdownMenu.ItemLabel>
+                </DropdownMenu.Item>
                 <DropdownMenu.Separator />
                 <DropdownMenu.Item onSelect={() => dialog.show(() => <DialogDeleteSession session={props.session} />)}>
                   <DropdownMenu.ItemLabel>{language.t("common.delete")}</DropdownMenu.ItemLabel>
@@ -1999,6 +2004,47 @@ export default function Layout(props: ParentProps) {
 
     return (
       <div class="group/session relative w-full rounded-md cursor-default transition-colors pl-2 pr-3 hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active">
+        <Show
+          when={!tooltip()}
+          fallback={
+            <Tooltip placement={props.mobile ? "bottom" : "right"} value={label} gutter={10}>
+              {item}
+            </Tooltip>
+          }
+        >
+          {item}
+        </Show>
+      </div>
+    )
+  }
+
+  const ImportSessionItem = (props: { mobile?: boolean; dense?: boolean }): JSX.Element => {
+    const label = "导入会话"
+    const tooltip = () => props.mobile || !layout.sidebar.opened()
+    const item = (
+      <button
+        type="button"
+        class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none ${
+          props.dense ? "py-0.5" : "py-1"
+        }`}
+        onClick={() => {
+          command.trigger("session.import")
+          setState("hoverSession", undefined)
+        }}
+      >
+        <div class="flex items-center gap-1 w-full">
+          <div class="shrink-0 size-6 flex items-center justify-center">
+            <Icon name="arrow-down-to-line" size="small" class="text-icon-weak" />
+          </div>
+          <span class="text-14-regular text-text-strong grow-1 min-w-0 overflow-hidden text-ellipsis truncate">
+            {label}
+          </span>
+        </div>
+      </button>
+    )
+
+    return (
+      <div class="group/session relative w-full rounded-md cursor-default transition-colors pl-2 pr-3 hover:bg-surface-raised-base-hover focus-within:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active">
         <Show
           when={!tooltip()}
           fallback={
@@ -2267,7 +2313,10 @@ export default function Layout(props: ParentProps) {
 
           <Collapsible.Content>
             <nav class="flex flex-col gap-1 px-2">
-              <NewSessionItem slug={slug()} mobile={props.mobile} />
+              <Show when={workspaceSetting()}>
+                <NewSessionItem slug={slug()} mobile={props.mobile} />
+                <ImportSessionItem mobile={props.mobile} />
+              </Show>
               <Show when={loading()}>
                 <SessionSkeleton />
               </Show>
@@ -2522,6 +2571,10 @@ export default function Layout(props: ParentProps) {
         class="size-full flex flex-col py-2 overflow-y-auto no-scrollbar [overflow-anchor:none]"
       >
         <nav class="flex flex-col gap-1 px-2">
+          <Show when={workspaceSetting()}>
+            <NewSessionItem slug={slug()} mobile={props.mobile} />
+            <ImportSessionItem mobile={props.mobile} />
+          </Show>
           <Show when={loading()}>
             <SessionSkeleton />
           </Show>
@@ -2699,7 +2752,7 @@ export default function Layout(props: ParentProps) {
                 when={workspacesEnabled()}
                 fallback={
                   <>
-                    <div class="py-4 px-3">
+                    <div class="px-3">
                       <TooltipKeybind
                         title={language.t("command.session.new")}
                         keybind={command.keybind("session.new")}
@@ -2708,7 +2761,7 @@ export default function Layout(props: ParentProps) {
                         <Button
                           size="large"
                           icon="plus-small"
-                          class="w-full"
+                          class="w-full mb-2"
                           onClick={() => {
                             if (!layout.sidebar.opened()) {
                               setState("hoverSession", undefined)
@@ -2719,6 +2772,16 @@ export default function Layout(props: ParentProps) {
                           }}
                         >
                           {language.t("command.session.new")}
+                        </Button>
+                      </TooltipKeybind>
+                      <TooltipKeybind title="导入会话" keybind={command.keybind("session.import")} placement="top">
+                        <Button
+                          size="large"
+                          icon="arrow-down-to-line"
+                          class="w-full"
+                          onClick={() => command.trigger("session.import")}
+                        >
+                          导入会话
                         </Button>
                       </TooltipKeybind>
                     </div>
