@@ -172,6 +172,117 @@ export function SessionHeader() {
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   const view = createMemo(() => layout.view(sessionKey))
 
+  const OPEN_APPS = [
+    "vscode",
+    "cursor",
+    "zed",
+    "textmate",
+    "antigravity",
+    "finder",
+    "terminal",
+    "iterm2",
+    "ghostty",
+    "xcode",
+    "android-studio",
+    "powershell",
+  ] as const
+  type OpenApp = (typeof OPEN_APPS)[number]
+
+  const os = createMemo<"macos" | "windows" | "linux" | "unknown">(() => {
+    if (platform.platform === "desktop" && platform.os) return platform.os
+    if (typeof navigator !== "object") return "unknown"
+    const value = navigator.platform || navigator.userAgent
+    if (/Mac/i.test(value)) return "macos"
+    if (/Win/i.test(value)) return "windows"
+    if (/Linux/i.test(value)) return "linux"
+    return "unknown"
+  })
+
+  const options = createMemo(() => {
+    if (os() === "macos") {
+      return [
+        { id: "vscode", label: "VS Code", icon: "vscode", openWith: "Visual Studio Code" },
+        { id: "cursor", label: "Cursor", icon: "cursor", openWith: "Cursor" },
+        { id: "zed", label: "Zed", icon: "zed", openWith: "Zed" },
+        { id: "textmate", label: "TextMate", icon: "textmate", openWith: "TextMate" },
+        { id: "antigravity", label: "Antigravity", icon: "antigravity", openWith: "Antigravity" },
+        { id: "finder", label: "Finder", icon: "finder" },
+        { id: "terminal", label: "Terminal", icon: "terminal", openWith: "Terminal" },
+        { id: "iterm2", label: "iTerm2", icon: "iterm2", openWith: "iTerm" },
+        { id: "ghostty", label: "Ghostty", icon: "ghostty", openWith: "Ghostty" },
+        { id: "xcode", label: "Xcode", icon: "xcode", openWith: "Xcode" },
+        { id: "android-studio", label: "Android Studio", icon: "android-studio", openWith: "Android Studio" },
+      ] as const
+    }
+
+    if (os() === "windows") {
+      return [
+        { id: "vscode", label: "VS Code", icon: "vscode", openWith: "code" },
+        { id: "cursor", label: "Cursor", icon: "cursor", openWith: "cursor" },
+        { id: "zed", label: "Zed", icon: "zed", openWith: "zed" },
+        { id: "finder", label: "File Explorer", icon: "finder" },
+        { id: "powershell", label: "PowerShell", icon: "powershell", openWith: "powershell" },
+      ] as const
+    }
+
+    return [
+      { id: "vscode", label: "VS Code", icon: "vscode", openWith: "code" },
+      { id: "cursor", label: "Cursor", icon: "cursor", openWith: "cursor" },
+      { id: "zed", label: "Zed", icon: "zed", openWith: "zed" },
+      { id: "finder", label: "File Manager", icon: "finder" },
+    ] as const
+  })
+
+  const [prefs, setPrefs] = persisted(Persist.global("open.app"), createStore({ app: "finder" as OpenApp }))
+
+  const canOpen = createMemo(() => platform.platform === "desktop" && !!platform.openPath && server.isLocal())
+  const current = createMemo(() => options().find((o) => o.id === prefs.app) ?? options()[0])
+
+  createEffect(() => {
+    if (platform.platform !== "desktop") return
+    const value = prefs.app
+    if (options().some((o) => o.id === value)) return
+    setPrefs("app", options()[0]?.id ?? "finder")
+  })
+
+  const openDir = (app: OpenApp) => {
+    const directory = projectDirectory()
+    if (!directory) return
+    if (!canOpen()) return
+
+    const item = options().find((o) => o.id === app)
+    const openWith = item && "openWith" in item ? item.openWith : undefined
+    Promise.resolve(platform.openPath?.(directory, openWith)).catch((err: unknown) => {
+      showToast({
+        variant: "error",
+        title: language.t("common.requestFailed"),
+        description: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+
+  const copyPath = () => {
+    const directory = projectDirectory()
+    if (!directory) return
+    navigator.clipboard
+      .writeText(directory)
+      .then(() => {
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: language.t("session.share.copy.copied"),
+          description: directory,
+        })
+      })
+      .catch((err: unknown) => {
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: err instanceof Error ? err.message : String(err),
+        })
+      })
+  }
+
   function cycleFileTree() {
     const cycle = layout.fileTree.cycle()
     if (cycle === 0) {

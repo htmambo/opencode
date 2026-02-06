@@ -36,3 +36,4 @@ script/opencode-backend.pid
 script/opencode-web.pid
 **/.ace-tool
 **/.claude
+**/.omc

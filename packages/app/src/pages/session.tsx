@@ -1067,15 +1067,6 @@ export default function Page() {
     })
   }
 
-  const errorMessage = (err: unknown) => {
-    if (err && typeof err === "object" && "data" in err) {
-      const data = (err as { data?: { message?: string } }).data
-      if (data?.message) return data.message
-    }
-    if (err instanceof Error) return err.message
-    return "Request failed"
-  }
-
   const downloadJson = (payload: unknown, filename: string) => {
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
     const url = URL.createObjectURL(blob)
@@ -3172,7 +3163,7 @@ export default function Page() {
                 when={prompt.ready()}
                 fallback={
                   <div class="w-full min-h-32 md:min-h-40 rounded-md border border-border-weak-base bg-background-base/50 px-4 py-3 text-text-weak whitespace-pre-wrap pointer-events-none">
-                    {handoff.prompt || language.t("prompt.loading")}
+                    {handoff.session.get(sessionKey())?.prompt || language.t("prompt.loading")}
                   </div>
                 }
               >
@@ -3887,7 +3878,7 @@ export default function Page() {
                             view={view}
                             diffStyle={layout.review.diffStyle()}
                             onDiffStyleChange={layout.review.setDiffStyle}
-                            onScrollRef={setReviewScroll}
+                            onScrollRef={(el: HTMLDivElement) => setTree("reviewScroll", el)}
                             onLineComment={(comment) => addCommentToContext({ ...comment, origin: "review" })}
                             comments={comments.all()}
                             focusedComment={comments.focus()}

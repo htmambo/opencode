@@ -920,6 +920,70 @@ export default function LegacyLayout(props: ParentProps) {
     void openProject(target.worktree)
   }
 
+
+  async function deleteSession(session: Session) {
+    const [store, setStore] = globalSync.child(session.directory)
+    const sessions = (store.session ?? []).filter((s) => !s.parentID && !s.time?.archived)
+    const index = sessions.findIndex((s) => s.id === session.id)
+    const nextSession = sessions[index + 1] ?? sessions[index - 1]
+
+    const result = await globalSDK.client.session
+      .delete({ directory: session.directory, sessionID: session.id })
+      .then((x) => x.data)
+      .catch((err) => {
+        showToast({
+          title: language.t("session.delete.failed.title"),
+          description: errorMessage(err),
+        })
+        return false
+      })
+
+    if (!result) return
+
+    setStore(
+      produce((draft) => {
+        const removed = new Set<string>([session.id])
+
+        const byParent = new Map<string, string[]>()
+        for (const item of draft.session) {
+          const parentID = item.parentID
+          if (!parentID) continue
+          const existing = byParent.get(parentID)
+          if (existing) {
+            existing.push(item.id)
+            continue
+          }
+          byParent.set(parentID, [item.id])
+        }
+
+        const stack = [session.id]
+        while (stack.length) {
+          const parentID = stack.pop()
+          if (!parentID) continue
+
+          const children = byParent.get(parentID)
+          if (!children) continue
+
+          for (const child of children) {
+            if (removed.has(child)) continue
+            removed.add(child)
+            stack.push(child)
+          }
+        }
+
+        draft.session = draft.session.filter((s) => !removed.has(s.id))
+      }),
+    )
+
+    if (session.id === params.id) {
+      if (nextSession) {
+        navigate(`/${params.dir}/session/${nextSession.id}`)
+      } else {
+        navigate(`/${params.dir}/session`)
+      }
+    }
+  }
+
   async function archiveSession(session: Session) {
     if ((await serverSDK().protocol) !== "v1") return
     const [store, setStore] = serverSync().child(session.directory)
@@ -1619,6 +1683,33 @@ export default function LegacyLayout(props: ParentProps) {
     })
   }
 
+  function DialogDeleteSession(props: { session: Session }) {
+    const handleDelete = async () => {
+      await deleteSession(props.session)
+      dialog.close()
+    }
+
+    return (
+      <Dialog title={language.t("session.delete.title")} fit>
+        <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
+          <div class="flex flex-col gap-1">
+            <span class="text-14-regular text-text-strong">
+              {language.t("session.delete.confirm", { name: props.session.title })}
+            </span>
+          </div>
+          <div class="flex justify-end gap-2">
+            <Button variant="ghost" size="large" onClick={() => dialog.close()}>
+              {language.t("common.cancel")}
+            </Button>
+            <Button variant="primary" size="large" onClick={handleDelete}>
+              {language.t("session.delete.button")}
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+    )
+  }
+
   function DialogDeleteWorkspace(props: { root: string; directory: string }) {
     const name = createMemo(() => getFilename(props.directory))
     const [data, setData] = createStore({
@@ -2033,6 +2124,11 @@ export default function LegacyLayout(props: ParentProps) {
     }
 
     onCleanup(cancelHoverPrefetch)
+
+    const [menu, setMenu] = createStore({
+      open: false,
+      pendingRename: false,
+    })
 
     const messageLabel = (message: Message) => {
       const parts = sessionStore.part[message.id] ?? []
@@ -3114,9 +3210,12 @@ export default function LegacyLayout(props: ParentProps) {
                           icon="plus-small"
                           class="w-full mb-2"
                           onClick={() => {
-                            const dir = worktree()
-                            if (!dir) return
-                            navigateWithSidebarReset(`/${base64Encode(dir)}/session`)
+                            if (!layout.sidebar.opened()) {
+                              setState("hoverSession", undefined)
+                              setState("hoverProject", undefined)
+                            }
+                            navigate(`/${base64Encode(p().worktree)}/session`)
+                            layout.mobileSidebar.hide()
                           }}
                         >
                           <IconV2 name="edit" size="small" />
