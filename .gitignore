@@ -32,3 +32,5 @@ script/opencode-web.pid
 **/.ace-tool
 **/.claude
 **/.omc
+**/.opencode/command/opsx-*
+**/.opencode/skills
