@@ -2966,6 +2966,7 @@ export default function LegacyLayout(props: ParentProps) {
     clearHoverProjectSoon,
     prefetchSession,
     archiveSession,
+    exportSession,
     workspaceName,
     renameWorkspace,
     editorOpen,
@@ -3195,9 +3196,50 @@ export default function LegacyLayout(props: ParentProps) {
                 </div>
               </div>
 
-              <Show
-                when={workspacesEnabled()}
-                fallback={
+              <div class="flex-1 min-h-0 flex flex-col">
+                <Show
+                  when={workspacesEnabled()}
+                  fallback={
+                    <>
+                      <div class="shrink-0 py-4 px-3">
+                        <TooltipKeybind
+                          title={language.t("command.session.new")}
+                          keybind={command.keybind("session.new")}
+                          placement="top"
+                        >
+                          <Button
+                            size="large"
+                            icon="plus-small"
+                            class="w-full"
+                            onClick={() => {
+                              if (!layout.sidebar.opened()) {
+                                setState("hoverSession", undefined)
+                                setState("hoverProject", undefined)
+                              }
+                              navigate(`/${base64Encode(p().worktree)}/session`)
+                              layout.mobileSidebar.hide()
+                            }}
+                          >
+                            {language.t("command.session.new")}
+                          </Button>
+                        </TooltipKeybind>
+                        <TooltipKeybind title="导入会话" keybind={command.keybind("session.import")} placement="top">
+                          <Button
+                            size="large"
+                            icon="arrow-down-to-line"
+                            class="w-full mt-2"
+                            onClick={() => command.trigger("session.import")}
+                          >
+                            导入会话
+                          </Button>
+                        </TooltipKeybind>
+                      </div>
+                      <div class="flex-1 min-h-0">
+                        <LocalWorkspace ctx={workspaceSidebarCtx} project={p()} mobile={panelProps.mobile} />
+                      </div>
+                    </>
+                  }
+                >
                   <>
                     <div class="px-3">
                       <TooltipKeybind

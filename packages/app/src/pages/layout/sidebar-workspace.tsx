@@ -42,6 +42,7 @@ export type WorkspaceSidebarContext = {
   clearHoverProjectSoon: () => void
   prefetchSession: (session: Session, priority?: "high" | "low") => void
   archiveSession: (session: Session) => Promise<void>
+  exportSession: (session: Session) => Promise<void> | void
   workspaceName: (directory: string, projectId?: string, branch?: string) => string | undefined
   renameWorkspace: (directory: string, next: string, projectId?: string, branch?: string) => void
   editorOpen: (id: string) => boolean
@@ -272,6 +273,7 @@ const WorkspaceSessionList = (props: {
           clearHoverProjectSoon={props.ctx.clearHoverProjectSoon}
           prefetchSession={props.ctx.prefetchSession}
           archiveSession={props.ctx.archiveSession}
+          exportSession={props.ctx.exportSession}
         />
       )}
     </For>
@@ -472,17 +474,45 @@ export const LocalWorkspace = (props: {
       ref={(el) => props.ctx.setScrollContainerRef(el, props.mobile)}
       class="size-full flex flex-col py-2 overflow-y-auto no-scrollbar [overflow-anchor:none]"
     >
-      <WorkspaceSessionList
-        slug={slug}
-        mobile={props.mobile}
-        ctx={props.ctx}
-        showNew={() => false}
-        loading={loading}
-        sessions={sessions}
-        hasMore={hasMore}
-        loadMore={loadMore}
-        language={language}
-      />
+      <nav class="flex flex-col gap-1 px-2">
+        <Show when={loading()}>
+          <SessionSkeleton />
+        </Show>
+        <For each={sessions()}>
+          {(session) => (
+            <SessionItem
+              session={session}
+              slug={slug()}
+              mobile={props.mobile}
+              children={children()}
+              sidebarExpanded={props.ctx.sidebarExpanded}
+              sidebarHovering={props.ctx.sidebarHovering}
+              nav={props.ctx.nav}
+              hoverSession={props.ctx.hoverSession}
+              setHoverSession={props.ctx.setHoverSession}
+              clearHoverProjectSoon={props.ctx.clearHoverProjectSoon}
+              prefetchSession={props.ctx.prefetchSession}
+              archiveSession={props.ctx.archiveSession}
+              exportSession={props.ctx.exportSession}
+            />
+          )}
+        </For>
+        <Show when={hasMore()}>
+          <div class="relative w-full py-1">
+            <Button
+              variant="ghost"
+              class="flex w-full text-left justify-start text-14-regular text-text-weak pl-9 pr-10"
+              size="large"
+              onClick={(e: MouseEvent) => {
+                loadMore()
+                ;(e.currentTarget as HTMLButtonElement).blur()
+              }}
+            >
+              {language.t("common.loadMore")}
+            </Button>
+          </div>
+        </Show>
+      </nav>
     </div>
   )
 }

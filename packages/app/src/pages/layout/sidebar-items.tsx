@@ -87,6 +87,7 @@ export type SessionItemProps = {
   clearHoverProjectSoon: () => void
   prefetchSession: (session: Session, priority?: "high" | "low") => void
   archiveSession: (session: Session) => Promise<void>
+  exportSession: (session: Session) => Promise<void> | void
 }
 
 const SessionRow = (props: {
@@ -108,10 +109,20 @@ const SessionRow = (props: {
 
   return (
     <A
+<<<<<<< HEAD
       href={`/${props.slug}/session/${props.session.id}`}
       class={`flex items-center gap-2 min-w-0 w-full text-left focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
       onPointerDown={props.warmPress}
       onFocus={props.warmFocus}
+=======
+      href={`${props.slug}/session/${props.session.id}`}
+      class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none transition-[padding] ${props.mobile ? "pr-14" : ""} group-hover/session:pr-14 group-focus-within/session:pr-14 group-active/session:pr-14 ${props.dense ? "py-0.5" : "py-1"}`}
+      onPointerEnter={scheduleHoverPrefetch}
+      onPointerLeave={cancelHoverPrefetch}
+      onMouseEnter={scheduleHoverPrefetch}
+      onMouseLeave={cancelHoverPrefetch}
+      onFocus={() => props.prefetchSession(props.session, "high")}
+>>>>>>> 1ad84cfa4 (fix(app): restore session import/export buttons)
       onClick={() => {
         if (props.sidebarOpened()) return
         props.clearHoverProjectSoon()
@@ -245,25 +256,40 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
             <div
               class="shrink-0 overflow-hidden transition-[width,opacity]"
               classList={{
-                "w-6 opacity-100 pointer-events-auto": !!props.mobile,
+                "w-12 opacity-100 pointer-events-auto": !!props.mobile,
                 "w-0 opacity-0 pointer-events-none": !props.mobile,
-                "group-hover/session:w-6 group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
-                "group-focus-within/session:w-6 group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
+                "group-hover/session:w-12 group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
+                "group-focus-within/session:w-12 group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
               }}
             >
-              <Tooltip value={language.t("common.archive")} placement="top">
-                <IconButton
-                  icon="archive"
-                  variant="ghost"
-                  class="size-6 rounded-md"
-                  aria-label={language.t("common.archive")}
-                  onClick={(event) => {
-                    event.preventDefault()
-                    event.stopPropagation()
-                    void props.archiveSession(props.session)
-                  }}
-                />
-              </Tooltip>
+              <div class="flex items-center gap-0.5">
+                <Tooltip value={language.t("common.export")} placement="top">
+                  <IconButton
+                    icon="arrow-down-to-line"
+                    variant="ghost"
+                    class="size-6 rounded-md"
+                    aria-label={language.t("common.export")}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      void props.exportSession(props.session)
+                    }}
+                  />
+                </Tooltip>
+                <Tooltip value={language.t("common.archive")} placement="top">
+                  <IconButton
+                    icon="archive"
+                    variant="ghost"
+                    class="size-6 rounded-md"
+                    aria-label={language.t("common.archive")}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      void props.archiveSession(props.session)
+                    }}
+                  />
+                </Tooltip>
+              </div>
             </div>
           </Show>
         </div>

@@ -779,6 +779,7 @@ export const dict = {
   "common.close": "Close",
   "common.edit": "Edit",
   "common.loadMore": "Load more",
+  "common.export": "Export session",
   "common.key.esc": "ESC",
   "common.key.ctrl": "Ctrl",
   "common.key.alt": "Alt",
