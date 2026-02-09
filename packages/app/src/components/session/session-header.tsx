@@ -67,8 +67,38 @@ export function SessionHeader() {
     "xcode",
     "android-studio",
     "powershell",
+    "sublime-text",
   ] as const
   type OpenApp = (typeof OPEN_APPS)[number]
+
+  const MAC_APPS = [
+    { id: "vscode", label: "VS Code", icon: "vscode", openWith: "Visual Studio Code" },
+    { id: "cursor", label: "Cursor", icon: "cursor", openWith: "Cursor" },
+    { id: "zed", label: "Zed", icon: "zed", openWith: "Zed" },
+    { id: "textmate", label: "TextMate", icon: "textmate", openWith: "TextMate" },
+    { id: "antigravity", label: "Antigravity", icon: "antigravity", openWith: "Antigravity" },
+    { id: "terminal", label: "Terminal", icon: "terminal", openWith: "Terminal" },
+    { id: "iterm2", label: "iTerm2", icon: "iterm2", openWith: "iTerm" },
+    { id: "ghostty", label: "Ghostty", icon: "ghostty", openWith: "Ghostty" },
+    { id: "xcode", label: "Xcode", icon: "xcode", openWith: "Xcode" },
+    { id: "android-studio", label: "Android Studio", icon: "android-studio", openWith: "Android Studio" },
+    { id: "sublime-text", label: "Sublime Text", icon: "sublime-text", openWith: "Sublime Text" },
+  ] as const
+
+  const WINDOWS_APPS = [
+    { id: "vscode", label: "VS Code", icon: "vscode", openWith: "code" },
+    { id: "cursor", label: "Cursor", icon: "cursor", openWith: "cursor" },
+    { id: "zed", label: "Zed", icon: "zed", openWith: "zed" },
+    { id: "powershell", label: "PowerShell", icon: "powershell", openWith: "powershell" },
+    { id: "sublime-text", label: "Sublime Text", icon: "sublime-text", openWith: "Sublime Text" },
+  ] as const
+
+  const LINUX_APPS = [
+    { id: "vscode", label: "VS Code", icon: "vscode", openWith: "code" },
+    { id: "cursor", label: "Cursor", icon: "cursor", openWith: "cursor" },
+    { id: "zed", label: "Zed", icon: "zed", openWith: "zed" },
+    { id: "sublime-text", label: "Sublime Text", icon: "sublime-text", openWith: "Sublime Text" },
+  ] as const
 
   const os = createMemo<"macos" | "windows" | "linux" | "unknown">(() => {
     if (platform.platform === "desktop" && platform.os) return platform.os
@@ -80,38 +110,44 @@ export function SessionHeader() {
     return "unknown"
   })
 
+  const [exists, setExists] = createStore<Partial<Record<OpenApp, boolean>>>({ finder: true })
+
+  createEffect(() => {
+    if (platform.platform !== "desktop") return
+    if (!platform.checkAppExists) return
+
+    const list = os()
+    const apps = list === "macos" ? MAC_APPS : list === "windows" ? WINDOWS_APPS : list === "linux" ? LINUX_APPS : []
+    if (apps.length === 0) return
+
+    void Promise.all(
+      apps.map((app) =>
+        Promise.resolve(platform.checkAppExists?.(app.openWith)).then((value) => {
+          const ok = Boolean(value)
+          console.debug(`[session-header] App "${app.label}" (${app.openWith}): ${ok ? "exists" : "does not exist"}`)
+          return [app.id, ok] as const
+        }),
+      ),
+    ).then((entries) => {
+      setExists(Object.fromEntries(entries) as Partial<Record<OpenApp, boolean>>)
+    })
+  })
+
   const options = createMemo(() => {
     if (os() === "macos") {
-      return [
-        { id: "vscode", label: "VS Code", icon: "vscode", openWith: "Visual Studio Code" },
-        { id: "cursor", label: "Cursor", icon: "cursor", openWith: "Cursor" },
-        { id: "zed", label: "Zed", icon: "zed", openWith: "Zed" },
-        { id: "textmate", label: "TextMate", icon: "textmate", openWith: "TextMate" },
-        { id: "antigravity", label: "Antigravity", icon: "antigravity", openWith: "Antigravity" },
-        { id: "finder", label: "Finder", icon: "finder" },
-        { id: "terminal", label: "Terminal", icon: "terminal", openWith: "Terminal" },
-        { id: "iterm2", label: "iTerm2", icon: "iterm2", openWith: "iTerm" },
-        { id: "ghostty", label: "Ghostty", icon: "ghostty", openWith: "Ghostty" },
-        { id: "xcode", label: "Xcode", icon: "xcode", openWith: "Xcode" },
-        { id: "android-studio", label: "Android Studio", icon: "android-studio", openWith: "Android Studio" },
-      ] as const
+      return [{ id: "finder", label: "Finder", icon: "finder" }, ...MAC_APPS.filter((app) => exists[app.id])] as const
     }
 
     if (os() === "windows") {
       return [
-        { id: "vscode", label: "VS Code", icon: "vscode", openWith: "code" },
-        { id: "cursor", label: "Cursor", icon: "cursor", openWith: "cursor" },
-        { id: "zed", label: "Zed", icon: "zed", openWith: "zed" },
-        { id: "finder", label: "File Explorer", icon: "finder" },
-        { id: "powershell", label: "PowerShell", icon: "powershell", openWith: "powershell" },
+        { id: "finder", label: "File Explorer", icon: "file-explorer" },
+        ...WINDOWS_APPS.filter((app) => exists[app.id]),
       ] as const
     }
 
     return [
-      { id: "vscode", label: "VS Code", icon: "vscode", openWith: "code" },
-      { id: "cursor", label: "Cursor", icon: "cursor", openWith: "cursor" },
-      { id: "zed", label: "Zed", icon: "zed", openWith: "zed" },
       { id: "finder", label: "File Manager", icon: "finder" },
+      ...LINUX_APPS.filter((app) => exists[app.id]),
     ] as const
   })
 
@@ -179,6 +215,11 @@ export function SessionHeader() {
     }
     layout.session.showPanel()
     layout.fileTree.setCycle(0)
+  }
+
+  function toggleReviewPanel() {
+    if (!layout.session.panel()) layout.session.showPanel()
+    view().reviewPanel.toggle()
   }
 
   const [state, setState] = createStore({
@@ -284,74 +325,78 @@ export function SessionHeader() {
           <Portal mount={mount()}>
             <div class="flex items-center gap-3">
               <Show when={projectDirectory()}>
-                <Show
-                  when={canOpen()}
-                  fallback={
-                    <Button
-                      variant="ghost"
-                      class="rounded-sm h-[24px] py-1.5 pr-3 pl-2 gap-2 border-none shadow-none"
-                      onClick={copyPath}
-                      aria-label={language.t("session.header.open.copyPath")}
-                    >
-                      <Icon name="copy" size="small" class="text-icon-base" />
-                      <span class="text-12-regular text-text-strong">{language.t("session.header.open.copyPath")}</span>
-                    </Button>
-                  }
-                >
-                  <div class="flex items-center">
-                    <Button
-                      variant="ghost"
-                      class="rounded-sm h-[24px] py-1.5 pr-3 pl-2 gap-2 border-none shadow-none rounded-r-none"
-                      onClick={() => openDir(current().id)}
-                      aria-label={language.t("session.header.open.ariaLabel", { app: current().label })}
-                    >
-                      <AppIcon id={current().icon} class="size-5" />
-                      <span class="text-12-regular text-text-strong">
-                        {language.t("session.header.open.action", { app: current().label })}
-                      </span>
-                    </Button>
-                    <DropdownMenu>
-                      <DropdownMenu.Trigger
-                        as={IconButton}
-                        icon="chevron-down"
+                <div class="hidden xl:flex items-center">
+                  <Show
+                    when={canOpen()}
+                    fallback={
+                      <Button
                         variant="ghost"
-                        class="rounded-sm h-[24px] w-auto px-1.5 border-none shadow-none rounded-l-none data-[expanded]:bg-surface-raised-base-active"
-                        aria-label={language.t("session.header.open.menu")}
-                      />
-                      <DropdownMenu.Portal>
-                        <DropdownMenu.Content placement="bottom-end" gutter={6}>
-                          <DropdownMenu.Group>
-                            <DropdownMenu.GroupLabel>{language.t("session.header.openIn")}</DropdownMenu.GroupLabel>
-                            <DropdownMenu.RadioGroup
-                              value={prefs.app}
-                              onChange={(value) => {
-                                if (!OPEN_APPS.includes(value as OpenApp)) return
-                                setPrefs("app", value as OpenApp)
-                              }}
-                            >
-                              {options().map((o) => (
-                                <DropdownMenu.RadioItem value={o.id} onSelect={() => openDir(o.id)}>
-                                  <AppIcon id={o.icon} class="size-5" />
-                                  <DropdownMenu.ItemLabel>{o.label}</DropdownMenu.ItemLabel>
-                                  <DropdownMenu.ItemIndicator>
-                                    <Icon name="check-small" size="small" class="text-icon-weak" />
-                                  </DropdownMenu.ItemIndicator>
-                                </DropdownMenu.RadioItem>
-                              ))}
-                            </DropdownMenu.RadioGroup>
-                          </DropdownMenu.Group>
-                          <DropdownMenu.Separator />
-                          <DropdownMenu.Item onSelect={copyPath}>
-                            <Icon name="copy" size="small" class="text-icon-weak" />
-                            <DropdownMenu.ItemLabel>
-                              {language.t("session.header.open.copyPath")}
-                            </DropdownMenu.ItemLabel>
-                          </DropdownMenu.Item>
-                        </DropdownMenu.Content>
-                      </DropdownMenu.Portal>
-                    </DropdownMenu>
-                  </div>
-                </Show>
+                        class="rounded-sm h-[24px] py-1.5 pr-3 pl-2 gap-2 border-none shadow-none"
+                        onClick={copyPath}
+                        aria-label={language.t("session.header.open.copyPath")}
+                      >
+                        <Icon name="copy" size="small" class="text-icon-base" />
+                        <span class="text-12-regular text-text-strong">
+                          {language.t("session.header.open.copyPath")}
+                        </span>
+                      </Button>
+                    }
+                  >
+                    <div class="flex items-center">
+                      <Button
+                        variant="ghost"
+                        class="rounded-sm h-[24px] py-1.5 pr-3 pl-2 gap-2 border-none shadow-none rounded-r-none"
+                        onClick={() => openDir(current().id)}
+                        aria-label={language.t("session.header.open.ariaLabel", { app: current().label })}
+                      >
+                        <AppIcon id={current().icon} class="size-5" />
+                        <span class="text-12-regular text-text-strong">
+                          {language.t("session.header.open.action", { app: current().label })}
+                        </span>
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenu.Trigger
+                          as={IconButton}
+                          icon="chevron-down"
+                          variant="ghost"
+                          class="rounded-sm h-[24px] w-auto px-1.5 border-none shadow-none rounded-l-none data-[expanded]:bg-surface-raised-base-active"
+                          aria-label={language.t("session.header.open.menu")}
+                        />
+                        <DropdownMenu.Portal>
+                          <DropdownMenu.Content placement="bottom-end" gutter={6}>
+                            <DropdownMenu.Group>
+                              <DropdownMenu.GroupLabel>{language.t("session.header.openIn")}</DropdownMenu.GroupLabel>
+                              <DropdownMenu.RadioGroup
+                                value={prefs.app}
+                                onChange={(value) => {
+                                  if (!OPEN_APPS.includes(value as OpenApp)) return
+                                  setPrefs("app", value as OpenApp)
+                                }}
+                              >
+                                {options().map((o) => (
+                                  <DropdownMenu.RadioItem value={o.id} onSelect={() => openDir(o.id)}>
+                                    <AppIcon id={o.icon} class="size-5" />
+                                    <DropdownMenu.ItemLabel>{o.label}</DropdownMenu.ItemLabel>
+                                    <DropdownMenu.ItemIndicator>
+                                      <Icon name="check-small" size="small" class="text-icon-weak" />
+                                    </DropdownMenu.ItemIndicator>
+                                  </DropdownMenu.RadioItem>
+                                ))}
+                              </DropdownMenu.RadioGroup>
+                            </DropdownMenu.Group>
+                            <DropdownMenu.Separator />
+                            <DropdownMenu.Item onSelect={copyPath}>
+                              <Icon name="copy" size="small" class="text-icon-weak" />
+                              <DropdownMenu.ItemLabel>
+                                {language.t("session.header.open.copyPath")}
+                              </DropdownMenu.ItemLabel>
+                            </DropdownMenu.Item>
+                          </DropdownMenu.Content>
+                        </DropdownMenu.Portal>
+                      </DropdownMenu>
+                    </div>
+                  </Show>
+                </div>
               </Show>
               <StatusPopover />
               <Show when={showShare()}>
@@ -396,7 +441,14 @@ export function SessionHeader() {
                         }
                       >
                         <div class="flex flex-col gap-2">
-                          <TextField value={shareUrl() ?? ""} readOnly copyable tabIndex={-1} class="w-full" />
+                          <TextField
+                            value={shareUrl() ?? ""}
+                            readOnly
+                            copyable
+                            copyKind="link"
+                            tabIndex={-1}
+                            class="w-full"
+                          />
                           <div class="grid grid-cols-2 gap-2">
                             <Button
                               size="large"
@@ -486,36 +538,60 @@ export function SessionHeader() {
                 <TooltipKeybind title={language.t("command.review.toggle")} keybind={command.keybind("review.toggle")}>
                   <Button
                     variant="ghost"
-                    class="group/file-tree-toggle size-6 p-0"
-                    onClick={cycleFileTree}
+                    class="group/review-toggle size-6 p-0"
+                    onClick={toggleReviewPanel}
                     aria-label={language.t("command.review.toggle")}
                     aria-expanded={view().reviewPanel.opened()}
                     aria-controls="review-panel"
                   >
                     <div class="relative flex items-center justify-center size-4 [&>*]:absolute [&>*]:inset-0">
+                      <Icon
+                        size="small"
+                        name={view().reviewPanel.opened() ? "layout-right-full" : "layout-right"}
+                        class="group-hover/review-toggle:hidden"
+                      />
+                      <Icon
+                        size="small"
+                        name="layout-right-partial"
+                        class="hidden group-hover/review-toggle:inline-block"
+                      />
+                      <Icon
+                        size="small"
+                        name={view().reviewPanel.opened() ? "layout-right" : "layout-right-full"}
+                        class="hidden group-active/review-toggle:inline-block"
+                      />
+                    </div>
+                  </Button>
+                </TooltipKeybind>
+              </div>
+              <div class="hidden md:block shrink-0">
+                <TooltipKeybind
+                  title={language.t("command.fileTree.toggle")}
+                  keybind={command.keybind("fileTree.toggle")}
+                >
+                  <Button
+                    variant="ghost"
+                    class="group/file-tree-toggle size-6 p-0"
+                    onClick={cycleFileTree}
+                    aria-label={language.t("command.fileTree.toggle")}
+                    aria-expanded={layout.fileTree.opened()}
+                    aria-controls="file-tree-panel"
+                  >
+                    <div class="relative flex items-center justify-center size-4">
                       <Show
                         when={!layout.session.panel()}
                         fallback={
-                          <>
-                            <Icon
-                              size="small"
-                              name={layout.fileTree.opened() ? "layout-right-full" : "layout-right"}
-                              class="group-hover/file-tree-toggle:hidden"
-                            />
-                            <Icon
-                              size="small"
-                              name="layout-right-partial"
-                              class="hidden group-hover/file-tree-toggle:inline-block"
-                            />
-                            <Icon
-                              size="small"
-                              name={layout.fileTree.opened() ? "layout-right" : "layout-right-full"}
-                              class="hidden group-active/file-tree-toggle:inline-block"
-                            />
-                          </>
+                          <Icon
+                            size="small"
+                            name="bullet-list"
+                            classList={{
+                              "text-icon-strong": layout.fileTree.opened(),
+                              "text-icon-weak": !layout.fileTree.opened(),
+                            }}
+                          />
                         }
                       >
-                        <Icon size="small" name="square-outline" />
+                        <Icon size="small" name="square-outline" class="text-icon-weak" />
                       </Show>
                     </div>
                   </Button>
