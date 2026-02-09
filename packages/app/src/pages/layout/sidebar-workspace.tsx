@@ -404,6 +404,7 @@ export const LocalWorkspace = (props: {
               clearHoverProjectSoon={props.ctx.clearHoverProjectSoon}
               prefetchSession={props.ctx.prefetchSession}
               archiveSession={props.ctx.archiveSession}
+              exportSession={props.ctx.exportSession}
             />
           )}
         </For>

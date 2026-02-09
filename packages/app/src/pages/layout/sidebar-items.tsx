@@ -147,7 +147,7 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
   const item = (
     <A
       href={`${props.slug}/session/${props.session.id}`}
-      class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none transition-[padding] ${props.mobile ? "pr-7" : ""} group-hover/session:pr-7 group-focus-within/session:pr-7 group-active/session:pr-7 ${props.dense ? "py-0.5" : "py-1"}`}
+      class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none transition-[padding] ${props.mobile ? "pr-14" : ""} group-hover/session:pr-14 group-focus-within/session:pr-14 group-active/session:pr-14 ${props.dense ? "py-0.5" : "py-1"}`}
       onPointerEnter={scheduleHoverPrefetch}
       onPointerLeave={cancelHoverPrefetch}
       onMouseEnter={scheduleHoverPrefetch}
@@ -247,7 +247,7 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
         </HoverCard>
       </Show>
       <div
-        class={`absolute ${props.dense ? "top-0.5 right-0.5" : "top-1 right-1"} flex items-center gap-0.5 transition-opacity`}
+        class={`absolute ${props.dense ? "top-0.5 right-0.5" : "top-1 right-1"} z-10 flex items-center gap-0.5 transition-opacity`}
         classList={{
           "opacity-100 pointer-events-auto": !!props.mobile,
           "opacity-0 pointer-events-none": !props.mobile,

@@ -1831,6 +1831,16 @@ export default function Layout(props: ParentProps) {
                             {language.t("command.session.new")}
                           </Button>
                         </TooltipKeybind>
+                        <TooltipKeybind title="导入会话" keybind={command.keybind("session.import")} placement="top">
+                          <Button
+                            size="large"
+                            icon="arrow-down-to-line"
+                            class="w-full mt-2"
+                            onClick={() => command.trigger("session.import")}
+                          >
+                            导入会话
+                          </Button>
+                        </TooltipKeybind>
                       </div>
                       <div class="flex-1 min-h-0">
                         <LocalWorkspace ctx={workspaceSidebarCtx} project={p()} mobile={panelProps.mobile} />
