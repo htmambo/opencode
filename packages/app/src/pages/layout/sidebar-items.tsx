@@ -109,12 +109,6 @@ const SessionRow = (props: {
 
   return (
     <A
-<<<<<<< HEAD
-      href={`/${props.slug}/session/${props.session.id}`}
-      class={`flex items-center gap-2 min-w-0 w-full text-left focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
-      onPointerDown={props.warmPress}
-      onFocus={props.warmFocus}
-=======
       href={`${props.slug}/session/${props.session.id}`}
       class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none transition-[padding] ${props.mobile ? "pr-14" : ""} group-hover/session:pr-14 group-focus-within/session:pr-14 group-active/session:pr-14 ${props.dense ? "py-0.5" : "py-1"}`}
       onPointerEnter={scheduleHoverPrefetch}
@@ -122,7 +116,6 @@ const SessionRow = (props: {
       onMouseEnter={scheduleHoverPrefetch}
       onMouseLeave={cancelHoverPrefetch}
       onFocus={() => props.prefetchSession(props.session, "high")}
->>>>>>> 1ad84cfa4 (fix(app): restore session import/export buttons)
       onClick={() => {
         if (props.sidebarOpened()) return
         props.clearHoverProjectSoon()
