@@ -97,6 +97,7 @@
 
   [data-slot="session-turn-message-content"] {
     margin-top: 0;
+    width: 100%;
     max-width: 100%;
   }
 
@@ -214,8 +215,7 @@
 
   /* [data-slot="session-turn-summary-section"] [data-slot="session-turn-markdown"], */
   [data-slot="session-turn-summary-section"] p,
-  [data-slot="session-turn-summary-section"] h2
-  {
+  [data-slot="session-turn-summary-section"] h2 {
     padding: 0 10px;
   }
 
