@@ -546,30 +546,29 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         },
       },
       sounds: {
-        agentEnabled: withFallback(() => store.sounds?.agentEnabled, defaultSettings.sounds.agentEnabled),
+        agentEnabled: createMemo(() => store.sounds?.agentEnabled ?? defaultSettings.sounds.agentEnabled),
         setAgentEnabled(value: boolean) {
           setStore("sounds", "agentEnabled", value)
         },
-        agent: withFallback(() => store.sounds?.agent, defaultSettings.sounds.agent),
+        agent: createMemo(() => store.sounds?.agent ?? defaultSettings.sounds.agent),
         setAgent(value: string) {
           setStore("sounds", "agent", value)
         },
-        permissionsEnabled: withFallback(
-          () => store.sounds?.permissionsEnabled,
-          defaultSettings.sounds.permissionsEnabled,
+        permissionsEnabled: createMemo(
+          () => store.sounds?.permissionsEnabled ?? defaultSettings.sounds.permissionsEnabled,
         ),
         setPermissionsEnabled(value: boolean) {
           setStore("sounds", "permissionsEnabled", value)
         },
-        permissions: withFallback(() => store.sounds?.permissions, defaultSettings.sounds.permissions),
+        permissions: createMemo(() => store.sounds?.permissions ?? defaultSettings.sounds.permissions),
         setPermissions(value: string) {
           setStore("sounds", "permissions", value)
         },
-        errorsEnabled: withFallback(() => store.sounds?.errorsEnabled, defaultSettings.sounds.errorsEnabled),
+        errorsEnabled: createMemo(() => store.sounds?.errorsEnabled ?? defaultSettings.sounds.errorsEnabled),
         setErrorsEnabled(value: boolean) {
           setStore("sounds", "errorsEnabled", value)
         },
-        errors: withFallback(() => store.sounds?.errors, defaultSettings.sounds.errors),
+        errors: createMemo(() => store.sounds?.errors ?? defaultSettings.sounds.errors),
         setErrors(value: string) {
           setStore("sounds", "errors", value)
         },

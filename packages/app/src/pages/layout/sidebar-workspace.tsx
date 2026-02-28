@@ -301,6 +301,7 @@ export const SortableWorkspace = (props: {
   project: LocalProject
   sortNow: Accessor<number>
   mobile?: boolean
+  sortNow?: Accessor<number>
 }): JSX.Element => {
   const navigate = useNavigate()
   const params = useParams()
@@ -314,7 +315,12 @@ export const SortableWorkspace = (props: {
     pendingRename: false,
   })
   const slug = createMemo(() => base64Encode(props.directory))
-  const sessions = createMemo(() => sortedRootSessions(workspaceStore, props.sortNow()))
+  const sortTick = createMemo(() => props.sortNow?.())
+  const sessions = createMemo(() => {
+    sortTick()
+    return sortedRootSessions(workspaceStore, Date.now())
+  })
+  const children = createMemo(() => childMapByParent(workspaceStore.session))
   const local = createMemo(() => props.directory === props.project.worktree)
   const active = createMemo(() => pathKey(props.ctx.currentDir()) === pathKey(props.directory))
   const workspaceValue = createMemo(() => {
@@ -450,6 +456,7 @@ export const LocalWorkspace = (props: {
   project: LocalProject
   sortNow: Accessor<number>
   mobile?: boolean
+  sortNow?: Accessor<number>
 }): JSX.Element => {
   const serverSync = useServerSync()
   const queryOptions = useQueryOptions()
@@ -459,11 +466,15 @@ export const LocalWorkspace = (props: {
     return { store, setStore }
   })
   const slug = createMemo(() => base64Encode(props.project.worktree))
-  const sessions = createMemo(() => sortedRootSessions(workspace().store, props.sortNow()))
-  const count = createMemo(() => sessions()?.length ?? 0)
-  const fetching = useIsFetching(() => queryOptions().sessions(pathKey(props.project.worktree)))
-  const hasMore = createMemo(() => workspace().store.sessionTotal > count())
-  const loading = () => fetching() > 0 && count() === 0
+  const sortTick = createMemo(() => props.sortNow?.())
+  const sessions = createMemo(() => {
+    sortTick()
+    return sortedRootSessions(workspace().store, Date.now())
+  })
+  const children = createMemo(() => childMapByParent(workspace().store.session))
+  const booted = createMemo((prev) => prev || workspace().store.status === "complete", false)
+  const loading = createMemo(() => !booted() && sessions().length === 0)
+  const hasMore = createMemo(() => workspace().store.sessionTotal > sessions().length)
   const loadMore = async () => {
     workspace().setStore("limit", (limit) => (limit ?? 0) + 5)
     await serverSync().project.loadSessions(props.project.worktree)
