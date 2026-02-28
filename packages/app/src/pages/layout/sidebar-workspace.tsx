@@ -88,6 +88,7 @@ export const SortableWorkspace = (props: {
   directory: string
   project: LocalProject
   mobile?: boolean
+  sortNow?: Accessor<number>
 }): JSX.Element => {
   const navigate = useNavigate()
   const params = useParams()
@@ -100,7 +101,11 @@ export const SortableWorkspace = (props: {
     pendingRename: false,
   })
   const slug = createMemo(() => base64Encode(props.directory))
-  const sessions = createMemo(() => sortedRootSessions(workspaceStore, Date.now()))
+  const sortTick = createMemo(() => props.sortNow?.())
+  const sessions = createMemo(() => {
+    sortTick()
+    return sortedRootSessions(workspaceStore, Date.now())
+  })
   const children = createMemo(() => childMapByParent(workspaceStore.session))
   const local = createMemo(() => props.directory === props.project.worktree)
   const active = createMemo(() => props.ctx.currentDir() === props.directory)
@@ -362,6 +367,7 @@ export const LocalWorkspace = (props: {
   ctx: WorkspaceSidebarContext
   project: LocalProject
   mobile?: boolean
+  sortNow?: Accessor<number>
 }): JSX.Element => {
   const globalSync = useGlobalSync()
   const language = useLanguage()
@@ -370,7 +376,11 @@ export const LocalWorkspace = (props: {
     return { store, setStore }
   })
   const slug = createMemo(() => base64Encode(props.project.worktree))
-  const sessions = createMemo(() => sortedRootSessions(workspace().store, Date.now()))
+  const sortTick = createMemo(() => props.sortNow?.())
+  const sessions = createMemo(() => {
+    sortTick()
+    return sortedRootSessions(workspace().store, Date.now())
+  })
   const children = createMemo(() => childMapByParent(workspace().store.session))
   const booted = createMemo((prev) => prev || workspace().store.status === "complete", false)
   const loading = createMemo(() => !booted() && sessions().length === 0)

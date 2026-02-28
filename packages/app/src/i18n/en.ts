@@ -227,6 +227,8 @@ export const dict = {
   "prompt.placeholder.summarizeComment": "Summarize comment…",
   "prompt.mode.shell": "Shell",
   "prompt.mode.shell.exit": "esc to exit",
+  "command.prompt.mode.shell": "Shell",
+  "command.prompt.mode.normal": "Prompt",
 
   "prompt.example.1": "Fix a TODO in the codebase",
   "prompt.example.2": "What is the tech stack of this project?",

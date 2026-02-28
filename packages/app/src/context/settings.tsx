@@ -10,8 +10,11 @@ export interface NotificationSettings {
 }
 
 export interface SoundSettings {
+  agentEnabled: boolean
   agent: string
+  permissionsEnabled: boolean
   permissions: string
+  errorsEnabled: boolean
   errors: string
 }
 
@@ -59,8 +62,11 @@ const defaultSettings: Settings = {
     errors: false,
   },
   sounds: {
+    agentEnabled: true,
     agent: "staplebops-01",
+    permissionsEnabled: true,
     permissions: "staplebops-02",
+    errorsEnabled: true,
     errors: "nope-03",
   },
 }
@@ -177,13 +183,27 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         },
       },
       sounds: {
+        agentEnabled: createMemo(() => store.sounds?.agentEnabled ?? defaultSettings.sounds.agentEnabled),
+        setAgentEnabled(value: boolean) {
+          setStore("sounds", "agentEnabled", value)
+        },
         agent: createMemo(() => store.sounds?.agent ?? defaultSettings.sounds.agent),
         setAgent(value: string) {
           setStore("sounds", "agent", value)
         },
+        permissionsEnabled: createMemo(
+          () => store.sounds?.permissionsEnabled ?? defaultSettings.sounds.permissionsEnabled,
+        ),
+        setPermissionsEnabled(value: boolean) {
+          setStore("sounds", "permissionsEnabled", value)
+        },
         permissions: createMemo(() => store.sounds?.permissions ?? defaultSettings.sounds.permissions),
         setPermissions(value: string) {
           setStore("sounds", "permissions", value)
+        },
+        errorsEnabled: createMemo(() => store.sounds?.errorsEnabled ?? defaultSettings.sounds.errorsEnabled),
+        setErrorsEnabled(value: boolean) {
+          setStore("sounds", "errorsEnabled", value)
         },
         errors: createMemo(() => store.sounds?.errors ?? defaultSettings.sounds.errors),
         setErrors(value: string) {
