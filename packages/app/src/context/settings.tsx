@@ -23,22 +23,12 @@ export interface Settings {
   general: {
     autoSave: boolean
     releaseNotes: boolean
-    followup: "queue" | "steer"
-    showFileTree: boolean
-    showNavigation: boolean
-    showSearch: boolean
-    showStatus: boolean
-    showTerminal: boolean
     showReasoningSummaries: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
-    showCustomAgents: boolean
-    mobileTitlebarPosition: "top" | "bottom"
-    newLayoutDesigns?: boolean
-    layoutTransitionEligible?: boolean
-    agentVisibilityInitialized?: boolean
-    newInterfaceNoticeDismissed?: boolean
-    shouldDisplayTabsToast?: boolean
+  }
+  updates: {
+    startup: boolean
   }
   appearance: {
     fontSize: number
@@ -183,17 +173,12 @@ const defaultSettings: Settings = {
   general: {
     autoSave: true,
     releaseNotes: true,
-    followup: "steer",
-    showFileTree: false,
-    showNavigation: false,
-    showSearch: false,
-    showStatus: false,
-    showTerminal: false,
     showReasoningSummaries: false,
-    shellToolPartsExpanded: false,
+    shellToolPartsExpanded: true,
     editToolPartsExpanded: false,
-    showCustomAgents: false,
-    mobileTitlebarPosition: "top",
+  },
+  updates: {
+    startup: true,
   },
   appearance: {
     fontSize: 14,
@@ -397,87 +382,29 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setReleaseNotes(value: boolean) {
           setStore("general", "releaseNotes", value)
         },
-        followup: withFallback(
-          () => (store.general?.followup === "queue" ? "steer" : store.general?.followup),
-          defaultSettings.general.followup,
-        ),
-        setFollowup(value: "queue" | "steer") {
-          setStore("general", "followup", value === "queue" ? "steer" : value)
-        },
-        showFileTree,
-        setShowFileTree(value: boolean) {
-          setStore("general", "showFileTree", value)
-        },
-        showNavigation: withFallback(() => store.general?.showNavigation, defaultSettings.general.showNavigation),
-        setShowNavigation(value: boolean) {
-          setStore("general", "showNavigation", value)
-        },
-        showSearch,
-        setShowSearch(value: boolean) {
-          setStore("general", "showSearch", value)
-        },
-        showStatus,
-        setShowStatus(value: boolean) {
-          setStore("general", "showStatus", value)
-        },
-        showTerminal: withFallback(() => store.general?.showTerminal, defaultSettings.general.showTerminal),
-        setShowTerminal(value: boolean) {
-          setStore("general", "showTerminal", value)
-        },
-        showReasoningSummaries: withFallback(
-          () => store.general?.showReasoningSummaries,
-          defaultSettings.general.showReasoningSummaries,
+        showReasoningSummaries: createMemo(
+          () => store.general?.showReasoningSummaries ?? defaultSettings.general.showReasoningSummaries,
         ),
         setShowReasoningSummaries(value: boolean) {
           setStore("general", "showReasoningSummaries", value)
         },
-        shellToolPartsExpanded: withFallback(
-          () => store.general?.shellToolPartsExpanded,
-          defaultSettings.general.shellToolPartsExpanded,
+        shellToolPartsExpanded: createMemo(
+          () => store.general?.shellToolPartsExpanded ?? defaultSettings.general.shellToolPartsExpanded,
         ),
         setShellToolPartsExpanded(value: boolean) {
           setStore("general", "shellToolPartsExpanded", value)
         },
-        editToolPartsExpanded: withFallback(
-          () => store.general?.editToolPartsExpanded,
-          defaultSettings.general.editToolPartsExpanded,
+        editToolPartsExpanded: createMemo(
+          () => store.general?.editToolPartsExpanded ?? defaultSettings.general.editToolPartsExpanded,
         ),
         setEditToolPartsExpanded(value: boolean) {
           setStore("general", "editToolPartsExpanded", value)
         },
-        showCustomAgents,
-        setShowCustomAgents(value: boolean) {
-          setStore("general", "showCustomAgents", value)
-        },
-        mobileTitlebarPosition: withFallback(
-          () => store.general?.mobileTitlebarPosition,
-          defaultSettings.general.mobileTitlebarPosition,
-        ),
-        setMobileTitlebarPosition(value: "top" | "bottom") {
-          setStore("general", "mobileTitlebarPosition", value)
-        },
-        newLayoutDesigns,
-        setNewLayoutDesigns(value: boolean) {
-          const next = oldInterfaceRetired() ? true : value
-          if (newLayoutDesigns() === next) return
-          setStore("general", "newLayoutDesigns", next)
-          if (typeof window !== "undefined") setTimeout(() => window.location.reload())
-        },
-        layoutTransitionClassified,
-        setOldLayoutEligible(eligible: boolean) {
-          const current = store.general?.layoutTransitionEligible
-          if (typeof current === "boolean") return
-          setStore("general", "layoutTransitionEligible", eligible)
-        },
-        initializeAgentVisibility,
-        layoutTransitionAvailable: createMemo(() => ready() && layoutTransition().available),
-        newInterfaceNoticeVisible: createMemo(() => ready() && layoutTransition().notice),
-        dismissNewInterfaceNotice() {
-          setStore("general", "newInterfaceNoticeDismissed", true)
-        },
-        shouldDisplayTabsToast: withFallback(() => store.general?.shouldDisplayTabsToast, false),
-        dismissTabsToast() {
-          setStore("general", "shouldDisplayTabsToast", false)
+      },
+      updates: {
+        startup: createMemo(() => store.updates?.startup ?? defaultSettings.updates.startup),
+        setStartup(value: boolean) {
+          setStore("updates", "startup", value)
         },
       },
       visibility: {
