@@ -64,3 +64,7 @@ export const getTabReorderIndex = (tabs: readonly string[], from: string, to: st
   if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) return undefined
   return toIndex
 }
+
+export const combineCommandSections = <T>(sections: readonly T[][]) => {
+  return sections.flatMap((section) => section)
+}

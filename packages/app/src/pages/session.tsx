@@ -13,7 +13,6 @@ import { Dialog } from "@opencode-ai/ui/dialog"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { Select } from "@opencode-ai/ui/select"
-import { useCodeComponent } from "@opencode-ai/ui/context/code"
 import { createAutoScroll } from "@opencode-ai/ui/hooks"
 import { Mark } from "@opencode-ai/ui/logo"
 
@@ -95,7 +94,6 @@ export default function Page() {
   const sync = useSync()
   const terminal = useTerminal()
   const dialog = useDialog()
-  const codeComponent = useCodeComponent()
   const command = useCommand()
   const language = useLanguage()
   const params = useParams()
@@ -1884,7 +1882,6 @@ export default function Page() {
           view={view}
           info={info as () => unknown}
           handoffFiles={() => handoff.session.get(sessionKey())?.files}
-          codeComponent={codeComponent}
           addCommentToContext={addCommentToContext}
           activeDraggable={() => store.activeDraggable}
           onDragStart={handleDragStart}
