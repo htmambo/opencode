@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/tui.json",
+
+  // 推荐先用官方默认主题，避免兼容性问题
+  "theme": "opencode",
+
+  // 新手保留默认 leader，便于跟文档和教程对齐
+  "keybinds": {
+    "leader": "ctrl+x",
+    "session_interrupt": "escape",
+    "input_newline": "shift+return,ctrl+return,alt+return,ctrl+j"
+  },
+
+  // 固定滚动速度，交互更可预期
+  "scroll_speed": 3,
+  "scroll_acceleration": {
+    "enabled": false
+  },
+
+  // 自动按终端宽度渲染 diff
+  "diff_style": "auto"
+}

@@ -1,0 +1,78 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // 企业建议：固定模型集合，避免随意切换
+  "model": "opencode/gpt-5.1-codex",
+  "small_model": "opencode/gpt-5.1",
+
+  // 企业环境通常建议禁用分享
+  "share": "disabled",
+
+  // 建议配合环境变量设置 server 认证：
+  // OPENCODE_SERVER_PASSWORD=... OPENCODE_SERVER_USERNAME=...
+  "server": {
+    "port": 4096,
+    "hostname": "127.0.0.1",
+    "mdns": false
+  },
+
+  // 企业可统一加载组织级规范
+  "instructions": [
+    "AGENTS.md",
+    "docs/security/ai-usage-policy.md",
+    "docs/security/data-classification.md"
+  ],
+
+  // 远程 MCP 示例：默认关闭，按审批启用
+  "mcp": {
+    "jira": {
+      "type": "remote",
+      "url": "https://jira.example.com/mcp",
+      "enabled": false
+    }
+  },
+
+  // 默认不启用组织外插件
+  "plugin": [],
+
+  // 更严格的权限：默认 ask，高风险 deny
+  "permission": {
+    "*": "ask",
+    "read": "allow",
+    "lsp": "allow",
+    "skill": "ask",
+    "edit": "deny",
+    "bash": {
+      "*": "deny",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "bun typecheck*": "allow"
+    },
+    "external_directory": "deny",
+    "webfetch": "ask",
+    "websearch": "deny",
+    "doom_loop": "ask",
+    "jira_*": "ask"
+  },
+
+  // 企业常见：build 才可修改，plan 永远只读
+  "agent": {
+    "build": {
+      "permission": {
+        "edit": "ask",
+        "bash": "ask",
+        "external_directory": "ask"
+      }
+    },
+    "plan": {
+      "permission": {
+        "edit": "deny",
+        "bash": "deny",
+        "external_directory": "deny"
+      }
+    }
+  },
+
+  "lsp": {}
+}
+

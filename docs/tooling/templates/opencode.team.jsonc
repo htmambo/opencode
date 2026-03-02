@@ -1,0 +1,66 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // 团队推荐：统一主模型，降低行为漂移
+  "model": "opencode/gpt-5.1-codex",
+  "small_model": "opencode/gpt-5.1",
+
+  // 团队通常建议关闭自动分享，按需手动 share
+  "share": "manual",
+
+  // 可将团队规范拆分到独立文档，并在这里统一引入
+  "instructions": [
+    "AGENTS.md",
+    "docs/engineering/rules.md"
+  ],
+
+  // 团队常用 MCP 示例（按需替换）
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true
+    }
+  },
+
+  // 先全局禁用该 MCP 工具，再按 agent 定向开启（避免上下文污染）
+  "tools": {
+    "context7*": false
+  },
+
+  // 典型团队 agent 策略：build 可用，plan 更严格
+  "agent": {
+    "build": {
+      "tools": {
+        "context7*": true
+      }
+    },
+    "plan": {
+      "permission": {
+        "edit": "deny",
+        "bash": "deny"
+      }
+    }
+  },
+
+  // 权限策略：读放行，写命令有约束，避免误操作
+  "permission": {
+    "read": "allow",
+    "lsp": "allow",
+    "skill": "allow",
+    "edit": "ask",
+    "bash": {
+      "*": "ask",
+      "git status*": "allow",
+      "git diff*": "allow",
+      "bun typecheck*": "allow",
+      "rm *": "deny"
+    },
+    "external_directory": "ask",
+    "doom_loop": "ask"
+  },
+
+  "lsp": {},
+  "plugin": []
+}
+
