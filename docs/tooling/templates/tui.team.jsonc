@@ -1,0 +1,27 @@
+{
+  "$schema": "https://opencode.ai/tui.json",
+
+  // 团队建议统一主题，减少截图/录屏差异
+  "theme": "opencode",
+
+  // 统一快捷键习惯，降低沟通成本
+  "keybinds": {
+    "leader": "ctrl+x",
+    "theme_list": "<leader>t",
+    "tool_details": "<leader>d",
+    "session_compact": "<leader>c",
+    "session_export": "<leader>x",
+    "username_toggle": "none"
+  },
+
+  // 团队协作常在不同终端宽度切换，建议保持 auto
+  "diff_style": "auto",
+
+  // 触控板场景体验更顺滑；若不习惯可关掉
+  "scroll_acceleration": {
+    "enabled": true
+  },
+
+  // acceleration 开启时会被忽略，保留用于快速回退
+  "scroll_speed": 3
+}

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // 先选一个你已可用的模型
+  "model": "opencode/gpt-5.1-codex",
+  "small_model": "opencode/gpt-5.1",
+
+  // 新手建议：手动分享，避免误公开
+  "share": "manual",
+
+  // 可选：本地 web/server 基础配置
+  "server": {
+    "port": 4096,
+    "hostname": "127.0.0.1"
+  },
+
+  // LSP 默认开启，帮助模型理解代码语义
+  "lsp": {},
+
+  // 先不接入 MCP，后续按需添加
+  "mcp": {},
+
+  // 权限建议：读/LSP/Skill 放行，改写与 bash 走审批
+  "permission": {
+    "read": "allow",
+    "lsp": "allow",
+    "skill": "allow",
+    "edit": "ask",
+    "bash": "ask",
+    "external_directory": "ask",
+    "doom_loop": "ask"
+  },
+
+  // 允许先空，后续逐步加
+  "plugin": [],
+  "instructions": []
+}
+
