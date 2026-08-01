@@ -109,13 +109,10 @@ const SessionRow = (props: {
 
   return (
     <A
-      href={`${props.slug}/session/${props.session.id}`}
-      class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none transition-[padding] ${props.mobile ? "pr-14" : ""} group-hover/session:pr-14 group-focus-within/session:pr-14 group-active/session:pr-14 ${props.dense ? "py-0.5" : "py-1"}`}
-      onPointerEnter={scheduleHoverPrefetch}
-      onPointerLeave={cancelHoverPrefetch}
-      onMouseEnter={scheduleHoverPrefetch}
-      onMouseLeave={cancelHoverPrefetch}
-      onFocus={() => props.prefetchSession(props.session, "high")}
+      href={`/${props.slug}/session/${props.session.id}`}
+      class={`flex items-center gap-2 min-w-0 w-full text-left focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
+      onPointerDown={props.warmPress}
+      onFocus={props.warmFocus}
       onClick={() => {
         if (props.sidebarOpened()) return
         props.clearHoverProjectSoon()
@@ -270,17 +267,17 @@ export const SessionItem = (props: SessionItemProps): JSX.Element => {
                   />
                 </Tooltip>
                 <Tooltip value={language.t("common.archive")} placement="top">
-                  <IconButton
-                    icon="archive"
-                    variant="ghost"
-                    class="size-6 rounded-md"
-                    aria-label={language.t("common.archive")}
-                    onClick={(event) => {
-                      event.preventDefault()
-                      event.stopPropagation()
-                      void props.archiveSession(props.session)
-                    }}
-                  />
+                <IconButton
+                  icon="archive"
+                  variant="ghost"
+                  class="size-6 rounded-md"
+                  aria-label={language.t("common.archive")}
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    void props.archiveSession(props.session)
+                  }}
+                />
                 </Tooltip>
               </div>
             </div>

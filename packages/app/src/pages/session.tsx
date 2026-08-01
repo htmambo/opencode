@@ -34,39 +34,36 @@ import { isScrollKeyTarget, scrollKey, scrollKeyOwner } from "@opencode-ai/ui/sc
 import { Tabs } from "@opencode-ai/ui/tabs"
 import { ButtonV2 } from "@opencode-ai/ui/v2/button-v2"
 import { createAutoScroll } from "@opencode-ai/ui/hooks"
-import { SessionReview } from "@opencode-ai/ui/session-review"
-import { Mark } from "@opencode-ai/ui/logo"
-
-import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
-import type { DragEvent } from "@thisbeyond/solid-dnd"
-import { useSync } from "@/context/sync"
-import { useTerminal, type LocalPTY } from "@/context/terminal"
-import { useLayout } from "@/context/layout"
-import { usePlatform } from "@/context/platform"
-import { Terminal } from "@/components/terminal"
-import { checksum, base64Encode } from "@opencode-ai/util/encode"
-import { findLast } from "@opencode-ai/util/array"
-import { useDialog } from "@opencode-ai/ui/context/dialog"
-import { DialogSelectFile } from "@/components/dialog-select-file"
-import FileTree from "@/components/file-tree"
-import { DialogSelectModel } from "@/components/dialog-select-model"
-import { DialogSelectMcp } from "@/components/dialog-select-mcp"
-import { DialogFork } from "@/components/dialog-fork"
+import { previewSelectedLines } from "@opencode-ai/session-ui/pierre/selection-bridge"
+import { Button } from "@opencode-ai/ui/button"
+import { showToast } from "@/utils/toast"
+import { base64Encode, checksum } from "@opencode-ai/core/util/encode"
+import { useLocation, useNavigate, useParams, useSearchParams } from "@solidjs/router"
+import { NewSessionView, SessionHeader } from "@/components/session"
+import { ErrorPage } from "@/pages/error"
+import { CommentsProvider, useComments } from "@/context/comments"
 import { useCommand } from "@/context/command"
 import { DirectoryDataProvider } from "@/pages/directory-layout"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
-import { useNavigate, useParams } from "@solidjs/router"
-import { UserMessage } from "@opencode-ai/sdk/v2"
-import type { FileDiff, Message, Part, Session } from "@opencode-ai/sdk/v2/client"
-import { useSDK } from "@/context/sdk"
-import { usePrompt } from "@/context/prompt"
-import { useComments, type LineComment } from "@/context/comments"
-import { extractPromptFromParts } from "@/utils/prompt"
-import { ConstrainDragYAxis, getDraggableId } from "@/utils/solid-dnd"
-import { usePermission } from "@/context/permission"
-import { decode64 } from "@/utils/base64"
-import { showToast } from "@opencode-ai/ui/toast"
+import { useLayout } from "@/context/layout"
+import { ModelsProvider } from "@/context/models"
+import { useNotification } from "@/context/notification"
+import { PromptProvider, usePrompt } from "@/context/prompt"
+import { usePlatform } from "@/context/platform"
+import { SDKProvider, useSDK } from "@/context/sdk"
+import { useServerSDK } from "@/context/server-sdk"
+import { ServerConnection, serverName, useServer } from "@/context/server"
+import { useSettings } from "@/context/settings"
+import { useSync } from "@/context/sync"
+import { useTabs } from "@/context/tabs"
+import { TerminalProvider, useTerminal } from "@/context/terminal"
+import { PromptInput } from "@/components/prompt-input"
+import { PromptInputV2Composer, usePromptInputV2Controller } from "@/components/prompt-input-v2"
+import { useSettingsCommand } from "@/components/settings-dialog"
+import { setCursorPosition } from "@/components/prompt-input/editor-dom"
+import { promptLength } from "@/components/prompt-input/history"
+import { type FollowupDraft, sendFollowupDraft } from "@/components/prompt-input/submit"
 import {
   createPromptInputController,
   createSessionComposerController,
@@ -124,21 +121,97 @@ function isCurrentSessionNotFoundError(error: unknown, sessionID: string | undef
   return isSessionNotFoundError(error, sessionID) || isLocalSessionNotFoundError(error, sessionID)
 }
 
-interface SessionReviewTabProps {
-  diffs: () => FileDiff[]
-  view: () => ReturnType<ReturnType<typeof useLayout>["view"]>
-  diffStyle: DiffStyle
-  onDiffStyleChange?: (style: DiffStyle) => void
-  onViewFile?: (file: string) => void
-  onLineComment?: (comment: { file: string; selection: SelectedLineRange; comment: string; preview?: string }) => void
-  comments?: LineComment[]
-  focusedComment?: { file: string; id: string } | null
-  onFocusedCommentChange?: (focus: { file: string; id: string } | null) => void
-  onScrollRef?: (el: HTMLDivElement) => void
-  classes?: {
-    root?: string
-    header?: string
-    container?: string
+async function runPromptRollbackMutation<T, R>(input: {
+  capturePrompt: () => { current: () => T[]; set: (value: T[]) => void; reset: () => void }
+  optimistic: (prompt: { set: (value: T[]) => void; reset: () => void }) => void
+  request: () => Promise<R>
+  complete: (result: R) => void
+  rollback: () => void
+  fail: (error: unknown) => void
+}) {
+  const prompt = input.capturePrompt()
+  const previous = prompt.current().slice()
+  batch(() => input.optimistic(prompt))
+  await input
+    .request()
+    .then(input.complete)
+    .catch((error) => {
+      batch(() => {
+        input.rollback()
+        prompt.set(previous)
+      })
+      input.fail(error)
+    })
+}
+
+export function SessionPage() {
+  return (
+    <SessionProviders>
+      <Page />
+    </SessionProviders>
+  )
+}
+
+// Rendered under app.tsx's TargetSessionRoute, which owns the per-server keyed
+// remount around the server-scoped providers. Nothing here may key on the
+// session ID: session tabs on the same server share this route instance, and
+// workspace-scoped state (terminal, directory providers) lives below.
+export function TargetSessionRouteContent() {
+  const params = useParams<{ serverKey: string; id: string }>()
+  const serverSync = useServerSync()
+  const directory = createMemo(() => serverSync().session.lineage.peek(params.id)?.session.directory)
+  return (
+    // Settings must keep the target-server SDK, sync, and models context and remain registered
+    // when session content falls back to the route error boundary.
+    <TargetServerScopedProviders directory={directory} sessionID={() => params.id}>
+      <TargetSessionSettingsCommand />
+      <SessionRouteErrorBoundary sessionID={params.id} serverKey={requireServerKey(params.serverKey)} padded>
+        <ResolvedTargetSessionRoute />
+      </SessionRouteErrorBoundary>
+    </TargetServerScopedProviders>
+  )
+}
+
+function TargetSessionSettingsCommand() {
+  useSettingsCommand()
+  return null
+}
+
+export function SessionRouteErrorBoundary(
+  props: ParentProps<{ sessionID?: string; serverKey?: ServerConnection.Key; padded?: boolean }>,
+) {
+  const settings = useSettings()
+  return (
+    <ErrorBoundary
+      fallback={(error) =>
+        settings.general.newLayoutDesigns() ? (
+          <SessionRouteFrame padded={props.padded}>
+            <SessionPanelFrame newLayout raised={!!props.sessionID}>
+              <SessionErrorFallback error={error} sessionID={props.sessionID} serverKey={props.serverKey} />
+            </SessionPanelFrame>
+          </SessionRouteFrame>
+        ) : (
+          <ErrorPage error={error} />
+        )
+      }
+    >
+      {props.children}
+    </ErrorBoundary>
+  )
+}
+
+function SessionErrorFallback(props: { error: unknown; sessionID?: string; serverKey?: ServerConnection.Key }) {
+  const language = useLanguage()
+  const server = useServer()
+  const tabs = useTabs()
+  const displayServer = createMemo(() => {
+    const key = props.serverKey ?? server.key
+    const conn = server.list.find((item) => ServerConnection.key(item) === key)
+    return conn ? serverName(conn) : key
+  })
+  const closeTab = () => {
+    if (!props.sessionID) return
+    tabs.removeSessionTab({ server: props.serverKey ?? server.key, sessionId: props.sessionID })
   }
   if (isCurrentSessionNotFoundError(props.error, props.sessionID)) {
     return (
@@ -371,142 +444,6 @@ export default function Page() {
       { defer: true },
     ),
   )
-
-  onCleanup(() => {
-    if (frame === undefined) return
-    cancelAnimationFrame(frame)
-  })
-
-  return (
-    <SessionReview
-      scrollRef={(el) => {
-        scroll = el
-        props.onScrollRef?.(el)
-        restoreScroll()
-      }}
-      onScroll={handleScroll}
-      onDiffRendered={() => requestAnimationFrame(restoreScroll)}
-      open={props.view().review.open()}
-      onOpenChange={props.view().review.setOpen}
-      classes={{
-        root: props.classes?.root ?? "pb-40",
-        header: props.classes?.header ?? "px-6",
-        container: props.classes?.container ?? "px-6",
-      }}
-      diffs={props.diffs()}
-      diffStyle={props.diffStyle}
-      onDiffStyleChange={props.onDiffStyleChange}
-      onViewFile={props.onViewFile}
-      focusedFile={props.focusedFile}
-      readFile={readFile}
-      onLineComment={props.onLineComment}
-      comments={props.comments}
-      focusedComment={props.focusedComment}
-      onFocusedCommentChange={props.onFocusedCommentChange}
-    />
-  )
-}
-
-export default function Page() {
-  const layout = useLayout()
-  const local = useLocal()
-  const file = useFile()
-  const sync = useSync()
-  const terminal = useTerminal()
-  const dialog = useDialog()
-  const codeComponent = useCodeComponent()
-  const command = useCommand()
-  const language = useLanguage()
-  const params = useParams()
-  const navigate = useNavigate()
-  const sdk = useSDK()
-  const prompt = usePrompt()
-  const comments = useComments()
-  const permission = usePermission()
-  const platform = usePlatform()
-
-  const request = createMemo(() => {
-    const sessionID = params.id
-    if (!sessionID) return
-    const next = sync.data.permission[sessionID]?.[0]
-    if (!next) return
-    if (next.tool) return
-    return next
-  })
-
-  const [ui, setUi] = createStore({
-    responding: false,
-    pendingMessage: undefined as string | undefined,
-    scrollGesture: 0,
-    autoCreated: false,
-  })
-
-  createEffect(
-    on(
-      () => request()?.id,
-      () => setUi("responding", false),
-      { defer: true },
-    ),
-  )
-
-  const decide = (response: "once" | "always" | "reject") => {
-    const perm = request()
-    if (!perm) return
-    if (ui.responding) return
-
-    setUi("responding", true)
-    sdk.client.permission
-      .respond({ sessionID: perm.sessionID, permissionID: perm.id, response })
-      .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err)
-        showToast({ title: language.t("common.requestFailed"), description: message })
-      })
-      .finally(() => setUi("responding", false))
-  }
-  const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
-  const tabs = createMemo(() => layout.tabs(sessionKey))
-  const view = createMemo(() => layout.view(sessionKey))
-  const showTabs = createMemo(() => view().review.open())
-
-  if (import.meta.env.DEV) {
-    createEffect(
-      on(
-        () => [params.dir, params.id] as const,
-        ([dir, id], prev) => {
-          if (!id) return
-          navParams({ dir, from: prev?.[1], to: id })
-        },
-      ),
-    )
-
-    createEffect(() => {
-      const id = params.id
-      if (!id) return
-      if (!prompt.ready()) return
-      navMark({ dir: params.dir, to: id, name: "storage:prompt-ready" })
-    })
-
-    createEffect(() => {
-      const id = params.id
-      if (!id) return
-      if (!terminal.ready()) return
-      navMark({ dir: params.dir, to: id, name: "storage:terminal-ready" })
-    })
-
-    createEffect(() => {
-      const id = params.id
-      if (!id) return
-      if (!file.ready()) return
-      navMark({ dir: params.dir, to: id, name: "storage:file-view-ready" })
-    })
-
-    createEffect(() => {
-      const id = params.id
-      if (!id) return
-      if (sync.data.message[id] === undefined) return
-      navMark({ dir: params.dir, to: id, name: "session:data-ready" })
-    })
-  }
 
   const isDesktop = createMediaQuery("(min-width: 768px)")
   const size = createSizing()
@@ -1067,519 +1004,44 @@ export default function Page() {
     })
   }
 
-  const downloadJson = (payload: unknown, filename: string) => {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = filename
-    link.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const exportSession = async () => {
-    const sessionID = params.id
-    if (!sessionID) return
-
-    const fallbackInfo = info()
-    const [sessionInfo, remoteMessages] = await Promise.all([
-      sdk.client.session
-        .get({ sessionID })
-        .then((res) => res.data ?? fallbackInfo)
-        .catch(() => fallbackInfo),
-      sdk.client.session
-        .messages({ sessionID, limit: 10_000 })
-        .then((res) => res.data ?? [])
-        .catch(() => undefined),
-    ])
-
-    if (!sessionInfo) {
-      showToast({
-        title: "Session export failed",
-        description: "Session data is not available",
-        variant: "error",
-      })
-      return
-    }
-
-    const messagesData =
-      remoteMessages ??
-      messages().map((message) => ({
-        info: message,
-        parts: sync.data.part[message.id] ?? ([] as Part[]),
-      }))
-
-    const payload = {
-      info: sessionInfo,
-      messages: messagesData.map((message) => ({
-        info: message.info,
-        parts: message.parts,
-      })),
-    }
-
-    downloadJson(payload, `session-${sessionID}.json`)
-    showToast({
-      title: "Session exported",
-      description: `Downloaded session-${sessionID}.json`,
-      variant: "success",
+  const updateCommentInContext = (input: {
+    id: string
+    file: string
+    selection: SelectedLineRange
+    comment: string
+    preview?: string
+  }) => {
+    comments.update(input.file, input.id, input.comment)
+    prompt.context.updateComment(input.file, input.id, {
+      comment: input.comment,
+      ...(input.preview ? { preview: input.preview } : {}),
     })
   }
-
-  const selectImportFile = () =>
-    new Promise<File | undefined>((resolve) => {
-      const state = { resolved: false }
-      const input = document.createElement("input")
-      input.type = "file"
-      input.accept = "application/json"
-      input.onchange = () => {
-        const file = input.files?.[0]
-        input.remove()
-        state.resolved = true
-        resolve(file)
-      }
-      input.onblur = () => {
-        if (state.resolved) return
-        input.remove()
-        resolve(undefined)
-      }
-      input.click()
-    })
-
-  const parseSessionImport = (raw: string) => {
-    try {
-      const parsed = JSON.parse(raw) as { info?: Session; messages?: { info: Message; parts: Part[] }[] }
-      if (!parsed.info || !Array.isArray(parsed.messages)) return undefined
-      return parsed
-    } catch (err) {
-      return undefined
-    }
-  }
-
-  const importSession = async () => {
-    const file = await selectImportFile()
-    if (!file) return
-
-    const raw = await file.text().catch(() => undefined)
-    if (!raw) {
-      showToast({
-        title: "Session import failed",
-        description: "Unable to read the selected file",
-        variant: "error",
-      })
-      return
-    }
-
-    const payload = parseSessionImport(raw)
-    if (!payload) {
-      showToast({
-        title: "Session import failed",
-        description: "Invalid session JSON format",
-        variant: "error",
-      })
-      return
-    }
-
-    const request = platform.fetch ?? fetch
-    const encodedDirectory = /[^\x00-\x7F]/.test(sdk.directory) ? encodeURIComponent(sdk.directory) : sdk.directory
-    const endpoint = new URL("/session/import", sdk.url).toString()
-    const response = await request(endpoint, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-opencode-directory": encodedDirectory,
-      },
-      body: JSON.stringify(payload),
-    }).catch((err) => {
-      showToast({
-        title: "Session import failed",
-        description: errorMessage(err),
-        variant: "error",
-      })
-      return undefined
-    })
-
-    if (!response) return
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => "")
-      showToast({
-        title: "Session import failed",
-        description: text || "Import request failed",
-        variant: "error",
-      })
-      return
-    }
-
-    const result = await response.json().catch(() => undefined)
-    const id = result?.id
-    if (!id || typeof id !== "string") {
-      showToast({
-        title: "Session import failed",
-        description: "Import response did not include a session id",
-        variant: "error",
-      })
-      return
-    }
-
-    navigate(`/${params.dir}/session/${id}`)
-    showToast({
-      title: "Session imported",
-      description: "Navigated to the imported session",
-      variant: "success",
-    })
-  }
-
-  command.register(() => [
-    {
-      id: "session.new",
-      title: language.t("command.session.new"),
-      category: language.t("command.category.session"),
-      keybind: "mod+shift+s",
-      slash: "new",
-      onSelect: () => navigate(`/${params.dir}/session`),
-    },
-    {
-      id: "file.open",
-      title: language.t("command.file.open"),
-      description: language.t("command.file.open.description"),
-      category: language.t("command.category.file"),
-      keybind: "mod+p",
-      slash: "open",
-      onSelect: () => dialog.show(() => <DialogSelectFile onOpenFile={() => showAllFiles()} />),
-    },
-    {
-      id: "context.addSelection",
-      title: language.t("command.context.addSelection"),
-      description: language.t("command.context.addSelection.description"),
-      category: language.t("command.category.context"),
-      keybind: "mod+shift+l",
-      disabled: (() => {
-        const active = tabs().active()
-        if (!active) return true
-        const path = file.pathFromTab(active)
-        if (!path) return true
-        return file.selectedLines(path) == null
-      })(),
-      onSelect: () => {
-        const active = tabs().active()
-        if (!active) return
-        const path = file.pathFromTab(active)
-        if (!path) return
 
   const removeCommentFromContext = (input: { id: string; file: string }) => {
     comments.remove(input.file, input.id)
     prompt.context.removeComment(input.file, input.id)
   }
 
-        addSelectionToContext(path, selectionFromLines(range))
-      },
-    },
-    {
-      id: "terminal.toggle",
-      title: language.t("command.terminal.toggle"),
-      description: "",
-      category: language.t("command.category.view"),
-      keybind: "ctrl+`",
-      slash: "terminal",
-      onSelect: () => view().terminal.toggle(),
-    },
-    {
-      id: "review.toggle",
-      title: language.t("command.review.toggle"),
-      description: "",
-      category: language.t("command.category.view"),
-      keybind: "mod+shift+r",
-      onSelect: () => layout.fileTree.toggle(),
-    },
-    {
-      id: "terminal.new",
-      title: language.t("command.terminal.new"),
-      description: language.t("command.terminal.new.description"),
-      category: language.t("command.category.terminal"),
-      keybind: "ctrl+alt+t",
-      onSelect: () => {
-        if (terminal.all().length > 0) terminal.new()
-        view().terminal.open()
-      },
-    },
-    {
-      id: "steps.toggle",
-      title: language.t("command.steps.toggle"),
-      description: language.t("command.steps.toggle.description"),
-      category: language.t("command.category.view"),
-      keybind: "mod+e",
-      slash: "steps",
-      disabled: !params.id,
-      onSelect: () => {
-        const msg = activeMessage()
-        if (!msg) return
-        setStore("expanded", msg.id, (open: boolean | undefined) => !open)
-      },
-    },
-    {
-      id: "message.previous",
-      title: language.t("command.message.previous"),
-      description: language.t("command.message.previous.description"),
-      category: language.t("command.category.session"),
-      keybind: "mod+arrowup",
-      disabled: !params.id,
-      onSelect: () => navigateMessageByOffset(-1),
-    },
-    {
-      id: "message.next",
-      title: language.t("command.message.next"),
-      description: language.t("command.message.next.description"),
-      category: language.t("command.category.session"),
-      keybind: "mod+arrowdown",
-      disabled: !params.id,
-      onSelect: () => navigateMessageByOffset(1),
-    },
-    {
-      id: "model.choose",
-      title: language.t("command.model.choose"),
-      description: language.t("command.model.choose.description"),
-      category: language.t("command.category.model"),
-      keybind: "mod+'",
-      slash: "model",
-      onSelect: () => dialog.show(() => <DialogSelectModel />),
-    },
-    {
-      id: "mcp.toggle",
-      title: language.t("command.mcp.toggle"),
-      description: language.t("command.mcp.toggle.description"),
-      category: language.t("command.category.mcp"),
-      keybind: "mod+;",
-      slash: "mcp",
-      onSelect: () => dialog.show(() => <DialogSelectMcp />),
-    },
-    {
-      id: "agent.cycle",
-      title: language.t("command.agent.cycle"),
-      description: language.t("command.agent.cycle.description"),
-      category: language.t("command.category.agent"),
-      keybind: "mod+.",
-      slash: "agent",
-      onSelect: () => local.agent.move(1),
-    },
-    {
-      id: "agent.cycle.reverse",
-      title: language.t("command.agent.cycle.reverse"),
-      description: language.t("command.agent.cycle.reverse.description"),
-      category: language.t("command.category.agent"),
-      keybind: "shift+mod+.",
-      onSelect: () => local.agent.move(-1),
-    },
-    {
-      id: "model.variant.cycle",
-      title: language.t("command.model.variant.cycle"),
-      description: language.t("command.model.variant.cycle.description"),
-      category: language.t("command.category.model"),
-      keybind: "shift+mod+d",
-      onSelect: () => {
-        local.model.variant.cycle()
-      },
-    },
-    {
-      id: "permissions.autoaccept",
-      title:
-        params.id && permission.isAutoAccepting(params.id, sdk.directory)
-          ? language.t("command.permissions.autoaccept.disable")
-          : language.t("command.permissions.autoaccept.enable"),
-      category: language.t("command.category.permissions"),
-      keybind: "mod+shift+a",
-      disabled: !params.id || !permission.permissionsEnabled(),
-      onSelect: () => {
-        const sessionID = params.id
-        if (!sessionID) return
-        permission.toggleAutoAccept(sessionID, sdk.directory)
-        showToast({
-          title: permission.isAutoAccepting(sessionID, sdk.directory)
-            ? language.t("toast.permissions.autoaccept.on.title")
-            : language.t("toast.permissions.autoaccept.off.title"),
-          description: permission.isAutoAccepting(sessionID, sdk.directory)
-            ? language.t("toast.permissions.autoaccept.on.description")
-            : language.t("toast.permissions.autoaccept.off.description"),
-        })
-      },
-    },
-    {
-      id: "session.undo",
-      title: language.t("command.session.undo"),
-      description: language.t("command.session.undo.description"),
-      category: language.t("command.category.session"),
-      slash: "undo",
-      disabled: !params.id || visibleUserMessages().length === 0,
-      onSelect: async () => {
-        const sessionID = params.id
-        if (!sessionID) return
-        if (status()?.type !== "idle") {
-          await sdk.client.session.abort({ sessionID }).catch(() => {})
-        }
-        const revert = info()?.revert?.messageID
-        // Find the last user message that's not already reverted
-        const message = findLast(userMessages(), (x) => !revert || x.id < revert)
-        if (!message) return
-        await sdk.client.session.revert({ sessionID, messageID: message.id })
-        // Restore the prompt from the reverted message
-        const parts = sync.data.part[message.id]
-        if (parts) {
-          const restored = extractPromptFromParts(parts, { directory: sdk.directory })
-          prompt.set(restored)
-        }
-        // Navigate to the message before the reverted one (which will be the new last visible message)
-        const priorMessage = findLast(userMessages(), (x) => x.id < message.id)
-        setActiveMessage(priorMessage)
-      },
-    },
-    {
-      id: "session.redo",
-      title: language.t("command.session.redo"),
-      description: language.t("command.session.redo.description"),
-      category: language.t("command.category.session"),
-      slash: "redo",
-      disabled: !params.id || !info()?.revert?.messageID,
-      onSelect: async () => {
-        const sessionID = params.id
-        if (!sessionID) return
-        const revertMessageID = info()?.revert?.messageID
-        if (!revertMessageID) return
-        const nextMessage = userMessages().find((x) => x.id > revertMessageID)
-        if (!nextMessage) {
-          // Full unrevert - restore all messages and navigate to last
-          await sdk.client.session.unrevert({ sessionID })
-          prompt.reset()
-          // Navigate to the last message (the one that was at the revert point)
-          const lastMsg = findLast(userMessages(), (x) => x.id >= revertMessageID)
-          setActiveMessage(lastMsg)
-          return
-        }
-        // Partial redo - move forward to next message
-        await sdk.client.session.revert({ sessionID, messageID: nextMessage.id })
-        // Navigate to the message before the new revert point
-        const priorMsg = findLast(userMessages(), (x) => x.id < nextMessage.id)
-        setActiveMessage(priorMsg)
-      },
-    },
-    {
-      id: "session.compact",
-      title: language.t("command.session.compact"),
-      description: language.t("command.session.compact.description"),
-      category: language.t("command.category.session"),
-      slash: "compact",
-      disabled: !params.id || visibleUserMessages().length === 0,
-      onSelect: async () => {
-        const sessionID = params.id
-        if (!sessionID) return
-        const model = local.model.current()
-        if (!model) {
-          showToast({
-            title: language.t("toast.model.none.title"),
-            description: language.t("toast.model.none.description"),
-          })
-          return
-        }
-        await sdk.client.session.summarize({
-          sessionID,
-          modelID: model.id,
-          providerID: model.provider.id,
-        })
-      },
-    },
-    {
-      id: "session.fork",
-      title: language.t("command.session.fork"),
-      description: language.t("command.session.fork.description"),
-      category: language.t("command.category.session"),
-      slash: "fork",
-      disabled: !params.id || visibleUserMessages().length === 0,
-      onSelect: () => dialog.show(() => <DialogFork />),
-    },
-    {
-      id: "session.export",
-      title: "导出会话",
-      description: "下载当前会话的JSON文件",
-      category: "Session",
-      disabled: !params.id,
-      onSelect: () => {
-        void exportSession()
-      },
-    },
-    {
-      id: "session.import",
-      title: "导入会话",
-      description: "从JSON文件中导入会话",
-      category: "Session",
-      onSelect: () => {
-        void importSession()
-      },
-    },
-    ...(sync.data.config.share !== "disabled"
-      ? [
-          {
-            id: "session.share",
-            title: language.t("command.session.share"),
-            description: language.t("command.session.share.description"),
-            category: language.t("command.category.session"),
-            slash: "share",
-            disabled: !params.id || !!info()?.share?.url,
-            onSelect: async () => {
-              if (!params.id) return
-              await sdk.client.session
-                .share({ sessionID: params.id })
-                .then((res) => {
-                  navigator.clipboard.writeText(res.data!.share!.url).catch(() =>
-                    showToast({
-                      title: language.t("toast.session.share.copyFailed.title"),
-                      variant: "error",
-                    }),
-                  )
-                })
-                .then(() =>
-                  showToast({
-                    title: language.t("toast.session.share.success.title"),
-                    description: language.t("toast.session.share.success.description"),
-                    variant: "success",
-                  }),
-                )
-                .catch(() =>
-                  showToast({
-                    title: language.t("toast.session.share.failed.title"),
-                    description: language.t("toast.session.share.failed.description"),
-                    variant: "error",
-                  }),
-                )
-            },
-          },
-          {
-            id: "session.unshare",
-            title: language.t("command.session.unshare"),
-            description: language.t("command.session.unshare.description"),
-            category: language.t("command.category.session"),
-            slash: "unshare",
-            disabled: !params.id || !info()?.share?.url,
-            onSelect: async () => {
-              if (!params.id) return
-              await sdk.client.session
-                .unshare({ sessionID: params.id })
-                .then(() =>
-                  showToast({
-                    title: language.t("toast.session.unshare.success.title"),
-                    description: language.t("toast.session.unshare.success.description"),
-                    variant: "success",
-                  }),
-                )
-                .catch(() =>
-                  showToast({
-                    title: language.t("toast.session.unshare.failed.title"),
-                    description: language.t("toast.session.unshare.failed.description"),
-                    variant: "error",
-                  }),
-                )
-            },
-          },
-        ]
-      : []),
-  ])
+  const reviewCommentActions = createMemo(() => ({
+    moreLabel: language.t("common.moreOptions"),
+    editLabel: language.t("common.edit"),
+    deleteLabel: language.t("common.delete"),
+    saveLabel: language.t("common.save"),
+  }))
+
+  const isEditableTarget = (target: EventTarget | null | undefined) => {
+    if (!(target instanceof HTMLElement)) return false
+    return /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(target.tagName) || target.isContentEditable
+  }
+
+  const deepActiveElement = () => {
+    let current: Element | null = document.activeElement
+    while (current instanceof HTMLElement && current.shadowRoot?.activeElement) {
+      current = current.shadowRoot.activeElement
+    }
+    return current instanceof HTMLElement ? current : undefined
+  }
 
   const handleKeyDown = (event: KeyboardEvent) => {
     const path = event.composedPath()
@@ -2794,1114 +2256,122 @@ export default function Page() {
 
         <div
           classList={{
-            "@container relative shrink-0 flex flex-col min-h-0 h-full bg-background-stronger": true,
-            "flex-1 pt-6 md:pt-3": true,
-            "md:flex-none": layout.session.panel(),
+            "@container relative shrink-0 flex flex-col min-h-0 h-full flex-1 md:flex-none transition-[width]": true,
+            "duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
+              !size.active() && !ui.reviewSnap && !desktopInlineTerminalOnlyOpen(),
           }}
           style={{
-            width: isDesktop() && layout.session.panel() ? `${layout.session.width()}px` : "100%",
-            "--prompt-height": store.promptHeight ? `${store.promptHeight}px` : undefined,
+            width: sessionPanelWidth(),
           }}
         >
-          <div class="flex-1 min-h-0 overflow-hidden">
-            <Switch>
-              <Match when={params.id}>
-                <Show when={activeMessage()}>
-                  <Show
-                    when={!mobileChanges()}
-                    fallback={
-                      <div class="relative h-full overflow-hidden">
-                        <Switch>
-                          <Match when={hasReview()}>
-                            <Show
-                              when={diffsReady()}
-                              fallback={
-                                <div class="px-4 py-4 text-text-weak">
-                                  {language.t("session.review.loadingChanges")}
-                                </div>
-                              }
-                            >
-                              <SessionReviewTab
-                                diffs={diffs}
-                                view={view}
-                                diffStyle="unified"
-                                onLineComment={(comment) => addCommentToContext({ ...comment, origin: "review" })}
-                                comments={comments.all()}
-                                focusedComment={comments.focus()}
-                                onFocusedCommentChange={comments.setFocus}
-                                onViewFile={(path) => {
-                                  showAllFiles()
-                                  const value = file.tab(path)
-                                  tabs().open(value)
-                                  file.load(path)
-                                }}
-                                classes={{
-                                  root: "pb-[calc(var(--prompt-height,8rem)+32px)]",
-                                  header: "px-4",
-                                  container: "px-4",
-                                }}
-                              />
-                            </Show>
-                          </Match>
-                          <Match when={true}>
-                            <div class="h-full px-4 pb-30 flex flex-col items-center justify-center text-center gap-6">
-                              <Mark class="w-14 opacity-10" />
-                              <div class="text-14-regular text-text-weak max-w-56">
-                                {language.t("session.review.empty")}
-                              </div>
-                            </div>
-                          </Match>
-                        </Switch>
-                      </div>
-                    }
-                  >
-                    <div class="relative w-full h-full min-w-0">
-                      <div
-                        class="absolute left-1/2 -translate-x-1/2 bottom-[calc(var(--prompt-height,8rem)+32px)] z-[60] pointer-events-none transition-all duration-200 ease-out"
-                        classList={{
-                          "opacity-100 translate-y-0 scale-100": autoScroll.userScrolled(),
-                          "opacity-0 translate-y-2 scale-95 pointer-events-none": !autoScroll.userScrolled(),
-                        }}
-                      >
-                        <button
-                          class="pointer-events-auto size-8 flex items-center justify-center rounded-full bg-background-base border border-border-base shadow-sm text-text-base hover:bg-background-stronger transition-colors"
-                          onClick={resumeScroll}
-                        >
-                          <Icon name="arrow-down-to-line" />
-                        </button>
-                      </div>
-                      <div
-                        ref={setScrollRef}
-                        onWheel={(e) => {
-                          const root = e.currentTarget
-                          const target = e.target instanceof Element ? e.target : undefined
-                          const nested = target?.closest("[data-scrollable]")
-                          if (!nested || nested === root) {
-                            markScrollGesture(root)
-                            return
-                          }
+          {settings.general.newLayoutDesigns() ? (
+            <Show when={sessionPanelKey()} keyed>
+              {(_) => (
+                <SessionPanelFrame newLayout raised={!!params.id}>
+                  <ErrorBoundary fallback={sessionErrorFallback}>{sessionPanelContent()}</ErrorBoundary>
+                </SessionPanelFrame>
+              )}
+            </Show>
+          ) : (
+            <SessionPanelFrame newLayout={false} raised={!!params.id}>
+              {sessionPanelContent()}
+            </SessionPanelFrame>
+          )}
 
-                          if (!(nested instanceof HTMLElement)) {
-                            markScrollGesture(root)
-                            return
-                          }
-
-                          const max = nested.scrollHeight - nested.clientHeight
-                          if (max <= 1) {
-                            markScrollGesture(root)
-                            return
-                          }
-
-                          const delta =
-                            e.deltaMode === 1
-                              ? e.deltaY * 40
-                              : e.deltaMode === 2
-                                ? e.deltaY * root.clientHeight
-                                : e.deltaY
-                          if (!delta) return
-
-                          if (delta < 0) {
-                            if (nested.scrollTop + delta <= 0) markScrollGesture(root)
-                            return
-                          }
-
-                          const remaining = max - nested.scrollTop
-                          if (delta > remaining) markScrollGesture(root)
-                        }}
-                        onTouchStart={(e) => {
-                          touchGesture = e.touches[0]?.clientY
-                        }}
-                        onTouchMove={(e) => {
-                          const next = e.touches[0]?.clientY
-                          const prev = touchGesture
-                          touchGesture = next
-                          if (next === undefined || prev === undefined) return
-
-                          const delta = prev - next
-                          if (!delta) return
-
-                          const root = e.currentTarget
-                          const target = e.target instanceof Element ? e.target : undefined
-                          const nested = target?.closest("[data-scrollable]")
-                          if (!nested || nested === root) {
-                            markScrollGesture(root)
-                            return
-                          }
-
-                          if (!(nested instanceof HTMLElement)) {
-                            markScrollGesture(root)
-                            return
-                          }
-
-                          const max = nested.scrollHeight - nested.clientHeight
-                          if (max <= 1) {
-                            markScrollGesture(root)
-                            return
-                          }
-
-                          if (delta < 0) {
-                            if (nested.scrollTop + delta <= 0) markScrollGesture(root)
-                            return
-                          }
-
-                          const remaining = max - nested.scrollTop
-                          if (delta > remaining) markScrollGesture(root)
-                        }}
-                        onTouchEnd={() => {
-                          touchGesture = undefined
-                        }}
-                        onTouchCancel={() => {
-                          touchGesture = undefined
-                        }}
-                        onPointerDown={(e) => {
-                          if (e.target !== e.currentTarget) return
-                          markScrollGesture(e.currentTarget)
-                        }}
-                        onScroll={(e) => {
-                          if (!hasScrollGesture()) return
-                          autoScroll.handleScroll()
-                          markScrollGesture(e.currentTarget)
-                          if (isDesktop()) scheduleScrollSpy(e.currentTarget)
-                        }}
-                        onClick={autoScroll.handleInteraction}
-                        class="relative min-w-0 w-full h-full overflow-y-auto session-scroller"
-                        style={{ "--session-title-height": info()?.title || info()?.parentID ? "40px" : "0px" }}
-                      >
-                        <Show when={info()?.title || info()?.parentID}>
-                          <div
-                            classList={{
-                              "sticky top-0 z-30 bg-background-stronger": true,
-                              "w-full": true,
-                              "px-4 md:px-6": true
-                            }}
-                          >
-                            <div class="h-10 flex items-center gap-1">
-                              <Show when={info()?.parentID}>
-                                <IconButton
-                                  tabIndex={-1}
-                                  icon="arrow-left"
-                                  variant="ghost"
-                                  onClick={() => {
-                                    navigate(`/${params.dir}/session/${info()?.parentID}`)
-                                  }}
-                                  aria-label={language.t("common.goBack")}
-                                />
-                              </Show>
-                              <Show when={info()?.title}>
-                                <h1 class="text-16-medium text-text-strong truncate">{info()?.title}</h1>
-                              </Show>
-                            </div>
-                          </div>
-                        </Show>
-
-                        <div
-                          ref={autoScroll.contentRef}
-                          role="log"
-                          class="flex flex-col gap-6 items-start justify-start pb-[calc(var(--prompt-height,8rem)+64px)] md:pb-[calc(var(--prompt-height,10rem)+64px)] transition-[margin]"
-                          classList={{
-                            "w-full": true,
-                            "mt-0.5": centered(),
-                            "mt-0": !centered(),
-                          }}
-                        >
-                          <Show when={store.turnStart > 0}>
-                            <div class="w-full flex justify-center">
-                              <Button
-                                variant="ghost"
-                                size="large"
-                                class="text-12-medium opacity-50"
-                                onClick={() => setStore("turnStart", 0)}
-                              >
-                                {language.t("session.messages.renderEarlier")}
-                              </Button>
-                            </div>
-                          </Show>
-                          <Show when={historyMore()}>
-                            <div class="w-full flex justify-center">
-                              <Button
-                                variant="ghost"
-                                size="large"
-                                class="text-12-medium opacity-50"
-                                disabled={historyLoading()}
-                                onClick={() => {
-                                  const id = params.id
-                                  if (!id) return
-                                  setStore("turnStart", 0)
-                                  sync.session.history.loadMore(id)
-                                }}
-                              >
-                                {historyLoading()
-                                  ? language.t("session.messages.loadingEarlier")
-                                  : language.t("session.messages.loadEarlier")}
-                              </Button>
-                            </div>
-                          </Show>
-                          <For each={renderedUserMessages()}>
-                            {(message) => {
-                              if (import.meta.env.DEV) {
-                                onMount(() => {
-                                  const id = params.id
-                                  if (!id) return
-                                  navMark({ dir: params.dir, to: id, name: "session:first-turn-mounted" })
-                                })
-                              }
-
-                              return (
-                                <div
-                                  id={anchor(message.id)}
-                                  data-message-id={message.id}
-                                  classList={{
-                                    "min-w-0 w-full max-w-full": true,
-                                  }}
-                                >
-                                  <SessionTurn
-                                    sessionID={params.id!}
-                                    messageID={message.id}
-                                    lastUserMessageID={lastUserMessage()?.id}
-                                    stepsExpanded={store.expanded[message.id] ?? false}
-                                    onStepsExpandedToggle={() =>
-                                      setStore("expanded", message.id, (open: boolean | undefined) => !open)
-                                    }
-                                    classes={{
-                                      root: "min-w-0 w-full relative",
-                                      content: "flex flex-col justify-between !overflow-visible",
-                                      container: "w-full px-4 transition-all duration-300",
-                                    }}
-                                  />
-                                </div>
-                              )
-                            }}
-                          </For>
-                        </div>
-                      </div>
-                    </div>
-                  </Show>
-                </Show>
-              </Match>
-              <Match when={true}>
-                <NewSessionView
-                  worktree={newSessionWorktree()}
-                  onWorktreeChange={(value) => {
-                    if (value === "create") {
-                      setStore("newSessionWorktree", value)
-                      return
-                    }
-
-                    setStore("newSessionWorktree", "main")
-
-                    const target = value === "main" ? sync.project?.worktree : value
-                    if (!target) return
-                    if (target === sync.data.path.directory) return
-                    layout.projects.open(target)
-                    navigate(`/${base64Encode(target)}/session`)
-                  }}
-                />
-              </Match>
-            </Switch>
-          </div>
-
-          {/* Prompt input */}
-          <div
-            ref={(el) => (promptDock = el)}
-            class="absolute inset-x-0 bottom-0 pt-12 pb-4 flex flex-col justify-center items-center z-50 px-4 md:px-0 bg-gradient-to-t from-background-stronger via-background-stronger to-transparent pointer-events-none"
-          >
-            <div
-              classList={{
-                "w-full px-4 pointer-events-auto": true,
-              }}
-            >
-              <Show when={request()} keyed>
-                {(perm) => (
-                  <div data-component="tool-part-wrapper" data-permission="true" class="mb-3">
-                    <BasicTool
-                      icon="checklist"
-                      locked
-                      defaultOpen
-                      trigger={{
-                        title: language.t("notification.permission.title"),
-                        subtitle:
-                          perm.permission === "doom_loop"
-                            ? language.t("settings.permissions.tool.doom_loop.title")
-                            : perm.permission,
-                      }}
-                    >
-                      <Show when={perm.patterns.length > 0}>
-                        <div class="flex flex-col gap-1 py-2 px-3 max-h-40 overflow-y-auto no-scrollbar">
-                          <For each={perm.patterns}>
-                            {(pattern) => <code class="text-12-regular text-text-base break-all">{pattern}</code>}
-                          </For>
-                        </div>
-                      </Show>
-                      <Show when={perm.permission === "doom_loop"}>
-                        <div class="text-12-regular text-text-weak pb-2 px-3">
-                          {language.t("settings.permissions.tool.doom_loop.description")}
-                        </div>
-                      </Show>
-                    </BasicTool>
-                    <div data-component="permission-prompt">
-                      <div data-slot="permission-actions">
-                        <Button variant="ghost" size="small" onClick={() => decide("reject")} disabled={ui.responding}>
-                          {language.t("ui.permission.deny")}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          size="small"
-                          onClick={() => decide("always")}
-                          disabled={ui.responding}
-                        >
-                          {language.t("ui.permission.allowAlways")}
-                        </Button>
-                        <Button variant="primary" size="small" onClick={() => decide("once")} disabled={ui.responding}>
-                          {language.t("ui.permission.allowOnce")}
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </Show>
-              <Show
-                when={prompt.ready()}
-                fallback={
-                  <div class="w-full min-h-32 md:min-h-40 rounded-md border border-border-weak-base bg-background-base/50 px-4 py-3 text-text-weak whitespace-pre-wrap pointer-events-none">
-                    {handoff.session.get(sessionKey())?.prompt || language.t("prompt.loading")}
-                  </div>
-                }
-              >
-                <PromptInput
-                  ref={(el) => {
-                    inputRef = el
-                  }}
-                  newSessionWorktree={newSessionWorktree()}
-                  onNewSessionWorktreeReset={() => setStore("newSessionWorktree", "main")}
-                  onSubmit={resumeScroll}
-                />
-              </Show>
+          <Show when={desktopSessionResizeOpen()}>
+            <div onPointerDown={() => size.start()}>
+              <ResizeHandle
+                classList={{
+                  "-right-1": settings.general.newLayoutDesigns(),
+                }}
+                direction="horizontal"
+                size={sessionPanelResizedWidth()}
+                min={SESSION_PANEL_WIDTH_MIN}
+                max={sessionPanelMax()}
+                onResize={(width) => {
+                  size.touch()
+                  layout.session.resize(width)
+                }}
+              />
             </div>
-          </div>
-
-          <Show when={isDesktop() && layout.session.panel()}>
-            <ResizeHandle
-              direction="horizontal"
-              size={layout.session.width()}
-              min={450}
-              max={window.innerWidth * 0.45}
-              onResize={layout.session.resize}
-            />
           </Show>
         </div>
 
-        {/* Desktop side panel - hidden on mobile */}
-        <Show when={isDesktop() && layout.session.panel()}>
-          <aside
-            id="review-panel"
-            aria-label={language.t("session.panel.reviewAndFiles")}
-            class="relative flex-1 min-w-0 h-full border-l border-border-weak-base flex"
-          >
-            <div class="flex-1 min-w-0 h-full">
-              <Show
-                when={fileTreeTab() === "changes"}
-                fallback={
-                  <DragDropProvider
-                    onDragStart={handleDragStart}
-                    onDragEnd={handleDragEnd}
-                    onDragOver={handleDragOver}
-                    collisionDetector={closestCenter}
-                  >
-                    <DragDropSensors />
-                    <ConstrainDragYAxis />
-                    <Tabs value={activeTab()} onChange={openTab}>
-                      <div class="sticky top-0 shrink-0 flex">
-                        <Tabs.List
-                          ref={(el: HTMLDivElement) => {
-                            let scrollTimeout: number | undefined
-                            let prevScrollWidth = el.scrollWidth
-                            let prevContextOpen = contextOpen()
-
-                            const handler = () => {
-                              if (scrollTimeout !== undefined) clearTimeout(scrollTimeout)
-                              scrollTimeout = window.setTimeout(() => {
-                                const scrollWidth = el.scrollWidth
-                                const clientWidth = el.clientWidth
-                                const currentContextOpen = contextOpen()
-
-                                // Only scroll when a tab is added (width increased), not on removal
-                                if (scrollWidth > prevScrollWidth) {
-                                  if (!prevContextOpen && currentContextOpen) {
-                                    // Context tab was opened, scroll to first
-                                    el.scrollTo({
-                                      left: 0,
-                                      behavior: "smooth",
-                                    })
-                                  } else if (scrollWidth > clientWidth) {
-                                    // File tab was added, scroll to rightmost
-                                    el.scrollTo({
-                                      left: scrollWidth - clientWidth,
-                                      behavior: "smooth",
-                                    })
-                                  }
-                                }
-                                // When width decreases (tab removed), don't scroll - let browser handle it naturally
-
-                                prevScrollWidth = scrollWidth
-                                prevContextOpen = currentContextOpen
-                              }, 0)
-                            }
-
-                            const wheelHandler = (e: WheelEvent) => {
-                              // Enable horizontal scrolling with mouse wheel
-                              if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
-                                el.scrollLeft += e.deltaY > 0 ? 50 : -50
-                                e.preventDefault()
-                              }
-                            }
-
-                            el.addEventListener("wheel", wheelHandler, { passive: false })
-
-                            const observer = new MutationObserver(handler)
-                            observer.observe(el, { childList: true })
-
-                            onCleanup(() => {
-                              el.removeEventListener("wheel", wheelHandler)
-                              observer.disconnect()
-                              if (scrollTimeout !== undefined) clearTimeout(scrollTimeout)
-                            })
-                          }}
-                        >
-                          <Show when={contextOpen()}>
-                            <Tabs.Trigger
-                              value="context"
-                              closeButton={
-                                <Tooltip value={language.t("common.closeTab")} placement="bottom">
-                                  <IconButton
-                                    icon="close-small"
-                                    variant="ghost"
-                                    class="h-5 w-5"
-                                    onClick={() => tabs().close("context")}
-                                    aria-label={language.t("common.closeTab")}
-                                  />
-                                </Tooltip>
-                              }
-                              hideCloseButton
-                              onMiddleClick={() => tabs().close("context")}
-                            >
-                              <div class="flex items-center gap-2">
-                                <SessionContextUsage variant="indicator" />
-                                <div>{language.t("session.tab.context")}</div>
-                              </div>
-                            </Tabs.Trigger>
-                          </Show>
-                          <SortableProvider ids={openedTabs()}>
-                            <For each={openedTabs()}>
-                              {(tab) => <SortableTab tab={tab} onTabClose={tabs().close} />}
-                            </For>
-                          </SortableProvider>
-                          <StickyAddButton>
-                            <TooltipKeybind
-                              title={language.t("command.file.open")}
-                              keybind={command.keybind("file.open")}
-                              class="flex items-center"
-                            >
-                              <IconButton
-                                icon="plus-small"
-                                variant="ghost"
-                                iconSize="large"
-                                onClick={() =>
-                                  dialog.show(() => <DialogSelectFile mode="files" onOpenFile={() => showAllFiles()} />)
-                                }
-                                aria-label={language.t("command.file.open")}
-                              />
-                            </TooltipKeybind>
-                          </StickyAddButton>
-                        </Tabs.List>
-                      </div>
-                      <Tabs.Content value="empty" class="flex flex-col h-full overflow-hidden contain-strict">
-                        <Show when={activeTab() === "empty"}>
-                          <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                            <div class="h-full px-6 pb-42 flex flex-col items-center justify-center text-center gap-6">
-                              <Mark class="w-14 opacity-10" />
-                              <div class="text-14-regular text-text-weak max-w-56">
-                                {language.t("session.files.selectToOpen")}
-                              </div>
-                            </div>
-                          </div>
-                        </Show>
-                      </Tabs.Content>
-
-                      <Show when={contextOpen()}>
-                        <Tabs.Content value="context" class="flex flex-col h-full overflow-hidden contain-strict">
-                          <Show when={activeTab() === "context"}>
-                            <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                              <SessionContextTab
-                                messages={messages}
-                                visibleUserMessages={visibleUserMessages}
-                                view={view}
-                                info={info}
-                              />
-                            </div>
-                          </Show>
-                        </Tabs.Content>
-                      </Show>
-
-                      <For each={openedTabs()}>
-                        {(tab) => {
-                          let scroll: HTMLDivElement | undefined
-                          let scrollFrame: number | undefined
-                          let pending: { x: number; y: number } | undefined
-                          let codeScroll: HTMLElement[] = []
-
-                          const path = createMemo(() => file.pathFromTab(tab))
-                          const state = createMemo(() => {
-                            const p = path()
-                            if (!p) return
-                            return file.get(p)
-                          })
-                          const contents = createMemo(() => state()?.content?.content ?? "")
-                          const cacheKey = createMemo(() => checksum(contents()))
-                          const isImage = createMemo(() => {
-                            const c = state()?.content
-                            return (
-                              c?.encoding === "base64" &&
-                              c?.mimeType?.startsWith("image/") &&
-                              c?.mimeType !== "image/svg+xml"
-                            )
-                          })
-                          const isSvg = createMemo(() => {
-                            const c = state()?.content
-                            return c?.mimeType === "image/svg+xml"
-                          })
-                          const isBinary = createMemo(() => state()?.content?.type === "binary")
-                          const svgContent = createMemo(() => {
-                            if (!isSvg()) return
-                            const c = state()?.content
-                            if (!c) return
-                            if (c.encoding !== "base64") return c.content
-                            return decode64(c.content)
-                          })
-
-                          const svgDecodeFailed = createMemo(() => {
-                            if (!isSvg()) return false
-                            const c = state()?.content
-                            if (!c) return false
-                            if (c.encoding !== "base64") return false
-                            return svgContent() === undefined
-                          })
-
-                          const svgToast = { shown: false }
-                          createEffect(() => {
-                            if (!svgDecodeFailed()) return
-                            if (svgToast.shown) return
-                            svgToast.shown = true
-                            showToast({
-                              variant: "error",
-                              title: language.t("toast.file.loadFailed.title"),
-                              description: "Invalid base64 content.",
-                            })
-                          })
-                          const svgPreviewUrl = createMemo(() => {
-                            if (!isSvg()) return
-                            const c = state()?.content
-                            if (!c) return
-                            if (c.encoding === "base64") return `data:image/svg+xml;base64,${c.content}`
-                            return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(c.content)}`
-                          })
-                          const imageDataUrl = createMemo(() => {
-                            if (!isImage()) return
-                            const c = state()?.content
-                            return `data:${c?.mimeType};base64,${c?.content}`
-                          })
-                          const selectedLines = createMemo(() => {
-                            const p = path()
-                            if (!p) return null
-                            if (file.ready()) return file.selectedLines(p) ?? null
-                            return handoff.files[p] ?? null
-                          })
-
-                          let wrap: HTMLDivElement | undefined
-
-                          const fileComments = createMemo(() => {
-                            const p = path()
-                            if (!p) return []
-                            return comments.list(p)
-                          })
-
-                          const commentedLines = createMemo(() => fileComments().map((comment) => comment.selection))
-
-                          const [note, setNote] = createStore({
-                            openedComment: null as string | null,
-                            commenting: null as SelectedLineRange | null,
-                            draft: "",
-                            positions: {} as Record<string, number>,
-                            draftTop: undefined as number | undefined,
-                          })
-
-                          const openedComment = () => note.openedComment
-                          const setOpenedComment = (
-                            value:
-                              | typeof note.openedComment
-                              | ((value: typeof note.openedComment) => typeof note.openedComment),
-                          ) => setNote("openedComment", value)
-
-                          const commenting = () => note.commenting
-                          const setCommenting = (
-                            value: typeof note.commenting | ((value: typeof note.commenting) => typeof note.commenting),
-                          ) => setNote("commenting", value)
-
-                          const draft = () => note.draft
-                          const setDraft = (
-                            value: typeof note.draft | ((value: typeof note.draft) => typeof note.draft),
-                          ) => setNote("draft", value)
-
-                          const positions = () => note.positions
-                          const setPositions = (
-                            value: typeof note.positions | ((value: typeof note.positions) => typeof note.positions),
-                          ) => setNote("positions", value)
-
-                          const draftTop = () => note.draftTop
-                          const setDraftTop = (
-                            value: typeof note.draftTop | ((value: typeof note.draftTop) => typeof note.draftTop),
-                          ) => setNote("draftTop", value)
-
-                          const commentLabel = (range: SelectedLineRange) => {
-                            const start = Math.min(range.start, range.end)
-                            const end = Math.max(range.start, range.end)
-                            if (start === end) return `line ${start}`
-                            return `lines ${start}-${end}`
-                          }
-
-                          const getRoot = () => {
-                            const el = wrap
-                            if (!el) return
-
-                            const host = el.querySelector("diffs-container")
-                            if (!(host instanceof HTMLElement)) return
-
-                            const root = host.shadowRoot
-                            if (!root) return
-
-                            return root
-                          }
-
-                          const findMarker = (root: ShadowRoot, range: SelectedLineRange) => {
-                            const line = Math.max(range.start, range.end)
-                            const node = root.querySelector(`[data-line="${line}"]`)
-                            if (!(node instanceof HTMLElement)) return
-                            return node
-                          }
-
-                          const markerTop = (wrapper: HTMLElement, marker: HTMLElement) => {
-                            const wrapperRect = wrapper.getBoundingClientRect()
-                            const rect = marker.getBoundingClientRect()
-                            return rect.top - wrapperRect.top + Math.max(0, (rect.height - 20) / 2)
-                          }
-
-                          const updateComments = () => {
-                            const el = wrap
-                            const root = getRoot()
-                            if (!el || !root) {
-                              setPositions({})
-                              setDraftTop(undefined)
-                              return
-                            }
-
-                            const next: Record<string, number> = {}
-                            for (const comment of fileComments()) {
-                              const marker = findMarker(root, comment.selection)
-                              if (!marker) continue
-                              next[comment.id] = markerTop(el, marker)
-                            }
-
-                            setPositions(next)
-
-                            const range = commenting()
-                            if (!range) {
-                              setDraftTop(undefined)
-                              return
-                            }
-
-                            const marker = findMarker(root, range)
-                            if (!marker) {
-                              setDraftTop(undefined)
-                              return
-                            }
-
-                            setDraftTop(markerTop(el, marker))
-                          }
-
-                          const scheduleComments = () => {
-                            requestAnimationFrame(updateComments)
-                          }
-
-                          createEffect(() => {
-                            fileComments()
-                            scheduleComments()
-                          })
-
-                          createEffect(() => {
-                            const range = commenting()
-                            scheduleComments()
-                            if (!range) return
-                            setDraft("")
-                          })
-
-                          createEffect(() => {
-                            const focus = comments.focus()
-                            const p = path()
-                            if (!focus || !p) return
-                            if (focus.file !== p) return
-                            if (activeTab() !== tab) return
-
-                            const target = fileComments().find((comment) => comment.id === focus.id)
-                            if (!target) return
-
-                            setOpenedComment(target.id)
-                            setCommenting(null)
-                            file.setSelectedLines(p, target.selection)
-                            requestAnimationFrame(() => comments.clearFocus())
-                          })
-
-                          const renderCode = (source: string, wrapperClass: string) => (
-                            <div
-                              ref={(el) => {
-                                wrap = el
-                                scheduleComments()
-                              }}
-                              class={`relative overflow-hidden ${wrapperClass}`}
-                            >
-                              <Dynamic
-                                component={codeComponent}
-                                file={{
-                                  name: path() ?? "",
-                                  contents: source,
-                                  cacheKey: cacheKey(),
-                                }}
-                                enableLineSelection
-                                selectedLines={selectedLines()}
-                                commentedLines={commentedLines()}
-                                onRendered={() => {
-                                  requestAnimationFrame(restoreScroll)
-                                  requestAnimationFrame(scheduleComments)
-                                }}
-                                onLineSelected={(range: SelectedLineRange | null) => {
-                                  const p = path()
-                                  if (!p) return
-                                  file.setSelectedLines(p, range)
-                                  if (!range) setCommenting(null)
-                                }}
-                                onLineSelectionEnd={(range: SelectedLineRange | null) => {
-                                  if (!range) {
-                                    setCommenting(null)
-                                    return
-                                  }
-
-                                  setOpenedComment(null)
-                                  setCommenting(range)
-                                }}
-                                overflow="scroll"
-                                class="select-text"
-                              />
-                              <For each={fileComments()}>
-                                {(comment) => (
-                                  <LineCommentView
-                                    id={comment.id}
-                                    top={positions()[comment.id]}
-                                    open={openedComment() === comment.id}
-                                    comment={comment.comment}
-                                    selection={commentLabel(comment.selection)}
-                                    onMouseEnter={() => {
-                                      const p = path()
-                                      if (!p) return
-                                      file.setSelectedLines(p, comment.selection)
-                                    }}
-                                    onClick={() => {
-                                      const p = path()
-                                      if (!p) return
-                                      setCommenting(null)
-                                      setOpenedComment((current) => (current === comment.id ? null : comment.id))
-                                      file.setSelectedLines(p, comment.selection)
-                                    }}
-                                  />
-                                )}
-                              </For>
-                              <Show when={commenting()}>
-                                {(range) => (
-                                  <Show when={draftTop() !== undefined}>
-                                    <LineCommentEditor
-                                      top={draftTop()}
-                                      value={draft()}
-                                      selection={commentLabel(range())}
-                                      onInput={(value) => setDraft(value)}
-                                      onCancel={() => setCommenting(null)}
-                                      onSubmit={(value) => {
-                                        const p = path()
-                                        if (!p) return
-                                        addCommentToContext({
-                                          file: p,
-                                          selection: range(),
-                                          comment: value,
-                                          origin: "file",
-                                        })
-                                        setCommenting(null)
-                                      }}
-                                      onPopoverFocusOut={(e: FocusEvent) => {
-                                        const current = e.currentTarget as HTMLDivElement
-                                        const target = e.relatedTarget
-                                        if (target instanceof Node && current.contains(target)) return
-
-                                        setTimeout(() => {
-                                          if (!document.activeElement || !current.contains(document.activeElement)) {
-                                            setCommenting(null)
-                                          }
-                                        }, 0)
-                                      }}
-                                    />
-                                  </Show>
-                                )}
-                              </Show>
-                            </div>
-                          )
-
-                          const getCodeScroll = () => {
-                            const el = scroll
-                            if (!el) return []
-
-                            const host = el.querySelector("diffs-container")
-                            if (!(host instanceof HTMLElement)) return []
-
-                            const root = host.shadowRoot
-                            if (!root) return []
-
-                            return Array.from(root.querySelectorAll("[data-code]")).filter(
-                              (node): node is HTMLElement => node instanceof HTMLElement && node.clientWidth > 0,
-                            )
-                          }
-
-                          const queueScrollUpdate = (next: { x: number; y: number }) => {
-                            pending = next
-                            if (scrollFrame !== undefined) return
-
-                            scrollFrame = requestAnimationFrame(() => {
-                              scrollFrame = undefined
-
-                              const next = pending
-                              pending = undefined
-                              if (!next) return
-
-                              view().setScroll(tab, next)
-                            })
-                          }
-
-                          const handleCodeScroll = (event: Event) => {
-                            const el = scroll
-                            if (!el) return
-
-                            const target = event.currentTarget
-                            if (!(target instanceof HTMLElement)) return
-
-                            queueScrollUpdate({
-                              x: target.scrollLeft,
-                              y: el.scrollTop,
-                            })
-                          }
-
-                          const syncCodeScroll = () => {
-                            const next = getCodeScroll()
-                            if (next.length === codeScroll.length && next.every((el, i) => el === codeScroll[i])) return
-
-                            for (const item of codeScroll) {
-                              item.removeEventListener("scroll", handleCodeScroll)
-                            }
-
-                            codeScroll = next
-
-                            for (const item of codeScroll) {
-                              item.addEventListener("scroll", handleCodeScroll)
-                            }
-                          }
-
-                          const restoreScroll = () => {
-                            const el = scroll
-                            if (!el) return
-
-                            const s = view()?.scroll(tab)
-                            if (!s) return
-
-                            syncCodeScroll()
-
-                            if (codeScroll.length > 0) {
-                              for (const item of codeScroll) {
-                                if (item.scrollLeft !== s.x) item.scrollLeft = s.x
-                              }
-                            }
-
-                            if (el.scrollTop !== s.y) el.scrollTop = s.y
-
-                            if (codeScroll.length > 0) return
-
-                            if (el.scrollLeft !== s.x) el.scrollLeft = s.x
-                          }
-
-                          const handleScroll = (event: Event & { currentTarget: HTMLDivElement }) => {
-                            if (codeScroll.length === 0) syncCodeScroll()
-
-                            queueScrollUpdate({
-                              x: codeScroll[0]?.scrollLeft ?? event.currentTarget.scrollLeft,
-                              y: event.currentTarget.scrollTop,
-                            })
-                          }
-
-                          createEffect(
-                            on(
-                              () => state()?.loaded,
-                              (loaded) => {
-                                if (!loaded) return
-                                requestAnimationFrame(restoreScroll)
-                              },
-                              { defer: true },
-                            ),
-                          )
-
-                          createEffect(
-                            on(
-                              () => file.ready(),
-                              (ready) => {
-                                if (!ready) return
-                                requestAnimationFrame(restoreScroll)
-                              },
-                              { defer: true },
-                            ),
-                          )
-
-                          createEffect(
-                            on(
-                              () => tabs().active() === tab,
-                              (active) => {
-                                if (!active) return
-                                if (!state()?.loaded) return
-                                requestAnimationFrame(restoreScroll)
-                              },
-                            ),
-                          )
-
-                          onCleanup(() => {
-                            for (const item of codeScroll) {
-                              item.removeEventListener("scroll", handleCodeScroll)
-                            }
-
-                            if (scrollFrame === undefined) return
-                            cancelAnimationFrame(scrollFrame)
-                          })
-
-                          return (
-                            <Tabs.Content
-                              value={tab}
-                              class="mt-3 relative"
-                              ref={(el: HTMLDivElement) => {
-                                scroll = el
-                                restoreScroll()
-                              }}
-                              onScroll={handleScroll}
-                            >
-                              <Switch>
-                                <Match when={state()?.loaded && isImage()}>
-                                  <div class="px-6 py-4 pb-40">
-                                    <img
-                                      src={imageDataUrl()}
-                                      alt={path()}
-                                      class="max-w-full"
-                                      onLoad={() => requestAnimationFrame(restoreScroll)}
-                                    />
-                                  </div>
-                                </Match>
-                                <Match when={state()?.loaded && isSvg()}>
-                                  <div class="flex flex-col gap-4 px-6 py-4">
-                                    {renderCode(svgContent() ?? "", "")}
-                                    <Show when={svgPreviewUrl()}>
-                                      <div class="flex justify-center pb-40">
-                                        <img src={svgPreviewUrl()} alt={path()} class="max-w-full max-h-96" />
-                                      </div>
-                                    </Show>
-                                  </div>
-                                </Match>
-                                <Match when={state()?.loaded && isBinary()}>
-                                  <div class="h-full px-6 pb-42 flex flex-col items-center justify-center text-center gap-6">
-                                    <Mark class="w-14 opacity-10" />
-                                    <div class="flex flex-col gap-2 max-w-md">
-                                      <div class="text-14-semibold text-text-strong truncate">
-                                        {path()?.split("/").pop()}
-                                      </div>
-                                      <div class="text-14-regular text-text-weak">
-                                        {language.t("session.files.binaryContent")}
-                                      </div>
-                                    </div>
-                                  </div>
-                                </Match>
-                                <Match when={state()?.loaded}>{renderCode(contents(), "pb-40")}</Match>
-                                <Match when={state()?.loading}>
-                                  <div class="px-6 py-4 text-text-weak">{language.t("common.loading")}...</div>
-                                </Match>
-                                <Match when={state()?.error}>
-                                  {(err) => <div class="px-6 py-4 text-text-weak">{err()}</div>}
-                                </Match>
-                              </Switch>
-                            </Tabs.Content>
-                          )
-                        }}
-                      </For>
-                    </Tabs>
-                    <DragOverlay>
-                      <Show when={store.activeDraggable}>
-                        {(tab) => {
-                          const path = createMemo(() => file.pathFromTab(tab()))
-                          return (
-                            <div class="relative px-6 h-12 flex items-center bg-background-stronger border-x border-border-weak-base border-b border-b-transparent">
-                              <Show when={path()}>{(p) => <FileVisual active path={p()} />}</Show>
-                            </div>
-                          )
-                        }}
-                      </Show>
-                    </DragOverlay>
-                  </DragDropProvider>
-                }
-              >
-                <div class="flex flex-col h-full overflow-hidden bg-background-stronger contain-strict">
-                  <div class="relative pt-2 flex-1 min-h-0 overflow-hidden">
-                    <Switch>
-                      <Match when={hasReview()}>
-                        <Show
-                          when={diffsReady()}
-                          fallback={
-                            <div class="px-6 py-4 text-text-weak">{language.t("session.review.loadingChanges")}</div>
-                          }
-                        >
-                          <SessionReviewTab
-                            diffs={diffs}
-                            view={view}
-                            diffStyle={layout.review.diffStyle()}
-                            onDiffStyleChange={layout.review.setDiffStyle}
-                            onScrollRef={(el: HTMLDivElement) => setTree("reviewScroll", el)}
-                            onLineComment={(comment) => addCommentToContext({ ...comment, origin: "review" })}
-                            comments={comments.all()}
-                            focusedComment={comments.focus()}
-                            onFocusedCommentChange={comments.setFocus}
-                            onViewFile={(path) => {
-                              showAllFiles()
-                              const value = file.tab(path)
-                              tabs().open(value)
-                              file.load(path)
-                            }}
-                          />
-                        </Show>
-                      </Match>
-                      <Match when={true}>
-                        <div class="h-full px-6 pb-30 flex flex-col items-center justify-center text-center gap-6">
-                          <Mark class="w-14 opacity-10" />
-                          <div class="text-14-regular text-text-weak max-w-56">
-                            {language.t("session.review.empty")}
-                          </div>
-                        </div>
-                      </Match>
-                    </Switch>
-                  </div>
+        <Show when={!newSessionDesign() && desktopSidePanelOpen()}>
+          <Suspense>
+            <SessionSidePanel
+              canReview={canReview}
+              diffs={reviewDiffs}
+              diffsReady={reviewReady}
+              empty={reviewEmptyText}
+              hasReview={hasReview}
+              reviewHasFocusableContent={hasReview}
+              reviewCount={reviewCount}
+              reviewPanel={reviewPanel}
+              activeDiff={activeReviewFile()}
+              focusReviewDiff={focusReviewDiff}
+              reviewSnap={ui.reviewSnap}
+              size={size}
+            />
+          </Suspense>
+        </Show>
+        <Show when={newSessionDesign()}>
+          <Show when={isDesktop() ? desktopV2PanelLayout().visible : terminalOpen()}>
+            <div class="min-w-0 h-full flex flex-1 flex-col">
+              <Show when={isDesktop() && (desktopV2ReviewOpen() || desktopFileTreeOpen())}>
+                <div class="min-h-0 flex-1">
+                  <Suspense>
+                    <SessionSidePanel
+                      canReview={canReview}
+                      diffs={reviewDiffs}
+                      diffsReady={reviewReady}
+                      empty={reviewEmptyText}
+                      hasReview={hasReview}
+                      reviewHasFocusableContent={() => hasReview() || reviewV2State.sidebarOpened()}
+                      reviewCount={reviewCount}
+                      reviewPanel={reviewPanelV2}
+                      reviewSidebarToggle={(disabled) => (
+                        <SessionReviewV2SidebarToggle
+                          opened={reviewV2State.sidebarOpened()}
+                          disabled={disabled}
+                          onToggle={reviewV2State.toggleSidebar}
+                        />
+                      )}
+                      fileBrowserState={reviewV2State}
+                      activeDiff={activeReviewFile()}
+                      focusReviewDiff={focusReviewDiff}
+                      reviewSnap={ui.reviewSnap}
+                      size={size}
+                      stacked={desktopV2PanelLayout().stacked}
+                    />
+                  </Suspense>
+                </div>
+              </Show>
+              <Show when={desktopV2PanelLayout().stacked}>
+                <div class="relative h-2 shrink-0" onPointerDown={() => size.start()}>
+                  <ResizeHandle
+                    class="!relative !inset-auto !h-full !w-full !transform-none"
+                    direction="vertical"
+                    size={layout.terminal.height()}
+                    min={100}
+                    max={typeof window === "undefined" ? 600 : window.innerHeight * 0.6}
+                    collapseThreshold={50}
+                    onResize={(height) => {
+                      size.touch()
+                      layout.terminal.resize(height)
+                    }}
+                    onCollapse={() => view().terminal.close()}
+                  />
+                </div>
+              </Show>
+              <Show when={terminalOpen()}>
+                <div
+                  classList={{
+                    "min-h-0 shrink-0": desktopV2PanelLayout().stacked,
+                    "min-h-0 flex-1": !desktopV2PanelLayout().stacked,
+                  }}
+                >
+                  <TerminalPanelV2 stacked={desktopV2PanelLayout().stacked} />
                 </div>
               </Show>
             </div>

@@ -720,8 +720,8 @@ export const dict = {
   "common.delete": "删除",
   "common.close": "关闭",
   "common.edit": "编辑",
-  "common.loadMore": "加载更多",
   "common.export": "导出会话",
+  "common.loadMore": "加载更多",
   "common.key.esc": "ESC",
 
   "sidebar.menu.toggle": "切换菜单",
@@ -747,7 +747,6 @@ export const dict = {
   "settings.tab.general": "通用",
   "settings.tab.shortcuts": "快捷键",
   "settings.tab.config": "配置",
-
   "settings.config.title": "配置",
   "settings.config.description": "编辑并保存全局 OpenCode 配置。",
   "settings.config.editor.label": "配置 JSON",

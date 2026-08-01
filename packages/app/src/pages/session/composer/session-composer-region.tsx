@@ -33,7 +33,7 @@ export function SessionComposerRegion(props: {
       <div
         classList={{
           "w-full px-3 pointer-events-auto": true,
-          "md:mx-auto": props.centered,
+          "md:max-w-200 md:mx-auto 2xl:max-w-[1000px]": controller.centered(),
         }}
       >
         <Show when={controller.state.questionRequest()} keyed>

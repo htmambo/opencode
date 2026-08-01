@@ -207,7 +207,3 @@ export const createSizing = () => {
 }
 
 export type Sizing = ReturnType<typeof createSizing>
-
-export const combineCommandSections = <T>(sections: readonly T[][]) => {
-  return sections.flatMap((section) => section)
-}

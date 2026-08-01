@@ -16,9 +16,8 @@ import { useNavigate, useParams } from "@solidjs/router"
 import { useLayout, LocalProject } from "@/context/layout"
 import { useServerSync } from "@/context/server-sync"
 import { Persist, persisted } from "@/utils/persist"
-import { base64Encode } from "@opencode-ai/util/encode"
-import { decode64, decode64 as base64Decode } from "@/utils/base64"
-import { Avatar } from "@opencode-ai/ui/avatar"
+import { base64Encode } from "@opencode-ai/core/util/encode"
+import { decode64 } from "@/utils/base64"
 import { ResizeHandle } from "@opencode-ai/ui/resize-handle"
 import { Button } from "@opencode-ai/ui/button"
 import { Icon as IconV2 } from "@opencode-ai/ui/v2/icon"
@@ -26,9 +25,8 @@ import { IconButton } from "@opencode-ai/ui/icon-button"
 import { Tooltip } from "@opencode-ai/ui/tooltip"
 import { DropdownMenu } from "@opencode-ai/ui/dropdown-menu"
 import { Dialog } from "@opencode-ai/ui/dialog"
-import { Switch as ToggleSwitch } from "@opencode-ai/ui/switch"
-import { getFilename } from "@opencode-ai/util/path"
-import { Session, type Message, type Part, type TextPart, type ToolPart } from "@opencode-ai/sdk/v2/client"
+import { getFilename } from "@opencode-ai/core/util/path"
+import { Session } from "@opencode-ai/sdk/v2/client"
 import { usePlatform } from "@/context/platform"
 import { useSettings } from "@/context/settings"
 import { createStore, produce, reconcile } from "solid-js/store"
@@ -61,9 +59,29 @@ import { Titlebar, type TitlebarUpdate } from "@/components/titlebar"
 import { useDirectoryPicker } from "@/components/directory-picker"
 import { ServerConnection, useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
-import { DateTime } from "luxon"
-
-type TaskRow = { label: string; value: string; valueClass?: string }
+import { pathKey } from "@/utils/path-key"
+import {
+  displayName,
+  effectiveWorkspaceOrder,
+  errorMessage,
+  latestRootSession,
+  sortedRootSessions,
+} from "./layout/helpers"
+import {
+  collectNewSessionDeepLinks,
+  collectOpenProjectDeepLinks,
+  deepLinkEvent,
+  drainPendingDeepLinks,
+} from "./layout/deep-links"
+import { createInlineEditorController } from "./layout/inline-editor"
+import {
+  LocalWorkspace,
+  SortableWorkspace,
+  WorkspaceDragOverlay,
+  type WorkspaceSidebarContext,
+} from "./layout/sidebar-workspace"
+import { ProjectDragOverlay, SortableProject, type ProjectSidebarContext } from "./layout/sidebar-project"
+import { SidebarContent } from "./layout/sidebar-shell"
 
 export default function LegacyLayout(props: ParentProps) {
   const serverSDK = useServerSDK()
@@ -304,101 +322,10 @@ export default function LegacyLayout(props: ParentProps) {
     reset()
   }
 
-  const closeEditor = () => setEditor({ active: "", value: "" })
-
-  const saveEditor = (callback: (next: string) => void) => {
-    const next = editor.value.trim()
-    if (!next) {
-      closeEditor()
-      return
-    }
-    closeEditor()
-    callback(next)
-  }
-
-  const editorKeyDown = (event: KeyboardEvent, callback: (next: string) => void) => {
-    if (event.key === "Enter") {
-      event.preventDefault()
-      saveEditor(callback)
-      return
-    }
-    if (event.key === "Escape") {
-      event.preventDefault()
-      closeEditor()
-    }
-  }
-
-  const InlineEditor = (props: {
-    id: string
-    value: Accessor<string>
-    onSave: (next: string) => void
-    class?: string
-    displayClass?: string
-    editing?: boolean
-    stopPropagation?: boolean
-    openOnDblClick?: boolean
-  }) => {
-    const isEditing = () => props.editing ?? editorOpen(props.id)
-    const stopEvents = () => props.stopPropagation ?? false
-    const allowDblClick = () => props.openOnDblClick ?? true
-    const stopPropagation = (event: Event) => {
-      if (!stopEvents()) return
-      event.stopPropagation()
-    }
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Enter" && event.key !== " ") return
-      event.preventDefault()
-      openEditor(props.id, props.value())
-    }
-    const handleDblClick = (event: MouseEvent) => {
-      if (!allowDblClick()) return
-      stopPropagation(event)
-      openEditor(props.id, props.value())
-    }
-
-    return (
-      <Show
-        when={isEditing()}
-        fallback={
-          <button
-            type="button"
-            classList={{
-              "bg-transparent border-0 p-0 text-left": true,
-              [props.displayClass ?? props.class ?? ""]: !!(props.displayClass ?? props.class),
-            }}
-            onDblClick={handleDblClick}
-            onPointerDown={stopPropagation}
-            onMouseDown={stopPropagation}
-            onClick={stopPropagation}
-            onTouchStart={stopPropagation}
-            onKeyDown={handleKeyDown}
-          >
-            {props.value()}
-          </button>
-        }
-      >
-        <InlineInput
-          ref={(el) => {
-            editorRef.current = el
-            requestAnimationFrame(() => el.focus())
-          }}
-          value={editorValue()}
-          class={props.class}
-          onInput={(event) => setEditor("value", event.currentTarget.value)}
-          onKeyDown={(event) => {
-            event.stopPropagation()
-            editorKeyDown(event, props.onSave)
-          }}
-          onBlur={() => closeEditor()}
-          onPointerDown={stopPropagation}
-          onClick={stopPropagation}
-          onDblClick={stopPropagation}
-          onMouseDown={stopPropagation}
-          onMouseUp={stopPropagation}
-          onTouchStart={stopPropagation}
-        />
-      </Show>
-    )
+  const navigateWithSidebarReset = (href: string) => {
+    clearSidebarHoverState()
+    navigate(href)
+    layout.mobileSidebar.hide()
   }
 
   function cycleTheme(direction = 1) {
@@ -617,18 +544,15 @@ export default function LegacyLayout(props: ParentProps) {
     const list = layout.projects.list()
     const last = server.projects.last()
 
-        const last = server.projects.last()
-        const next = value.list.find((project) => project.worktree === last) ?? value.list[0]
-        if (!next) return
-        setState("autoselect", false)
-        openProject(next.worktree, false)
-        navigateToProject(next.worktree)
-      },
-      { defer: true },
-    ),
-  )
-
-  const workspaceKey = (directory: string) => directory.replace(/[\\/]+$/, "")
+    if (list.length === 0) {
+      if (!last) return
+      await openProject(last, true)
+    } else {
+      const next = list.find((project) => project.worktree === last) ?? list[0]
+      if (!next) return
+      await openProject(next.worktree, true)
+    }
+  })
 
   const workspaceName = (directory: string, projectId?: string, branch?: string) => {
     const key = pathKey(directory)
@@ -920,67 +844,27 @@ export default function LegacyLayout(props: ParentProps) {
     void openProject(target.worktree)
   }
 
+  function navigateSessionByUnseen(offset: number) {
+    const sessions = currentSessions()
+    if (sessions.length === 0) return
 
-  async function deleteSession(session: Session) {
-    const [store, setStore] = globalSync.child(session.directory)
-    const sessions = (store.session ?? []).filter((s) => !s.parentID && !s.time?.archived)
-    const index = sessions.findIndex((s) => s.id === session.id)
-    const nextSession = sessions[index + 1] ?? sessions[index - 1]
+    const hasUnseen = sessions.some((session) => notification.session.unseenCount(session.id) > 0)
+    if (!hasUnseen) return
 
-    const result = await globalSDK.client.session
-      .delete({ directory: session.directory, sessionID: session.id })
-      .then((x) => x.data)
-      .catch((err) => {
-        showToast({
-          title: language.t("session.delete.failed.title"),
-          description: errorMessage(err),
-        })
-        return false
-      })
+    const activeIndex = params.id ? sessions.findIndex((s) => s.id === params.id) : -1
+    const start = activeIndex === -1 ? (offset > 0 ? -1 : 0) : activeIndex
 
-    if (!result) return
+    for (let i = 1; i <= sessions.length; i++) {
+      const index = offset > 0 ? (start + i) % sessions.length : (start - i + sessions.length) % sessions.length
+      const session = sessions[index]
+      if (!session) continue
+      if (notification.session.unseenCount(session.id) === 0) continue
 
-    setStore(
-      produce((draft) => {
-        const removed = new Set<string>([session.id])
+      prefetchSession(session, "high")
+      warm(sessions, index)
 
-        const byParent = new Map<string, string[]>()
-        for (const item of draft.session) {
-          const parentID = item.parentID
-          if (!parentID) continue
-          const existing = byParent.get(parentID)
-          if (existing) {
-            existing.push(item.id)
-            continue
-          }
-          byParent.set(parentID, [item.id])
-        }
-
-        const stack = [session.id]
-        while (stack.length) {
-          const parentID = stack.pop()
-          if (!parentID) continue
-
-          const children = byParent.get(parentID)
-          if (!children) continue
-
-          for (const child of children) {
-            if (removed.has(child)) continue
-            removed.add(child)
-            stack.push(child)
-          }
-        }
-
-        draft.session = draft.session.filter((s) => !removed.has(s.id))
-      }),
-    )
-
-    if (session.id === params.id) {
-      if (nextSession) {
-        navigate(`/${params.dir}/session/${nextSession.id}`)
-      } else {
-        navigate(`/${params.dir}/session`)
-      }
+      navigateToSession(session)
+      return
     }
   }
 
@@ -1009,6 +893,50 @@ export default function LegacyLayout(props: ParentProps) {
         navigate(`/${params.dir}/session`)
       }
     }
+  }
+
+  const exportSession = async (session: Session) => {
+    if ((await serverSDK().protocol) !== "v1") return
+    const [sessionInfo, messagesData] = await Promise.all([
+      serverSDK().client.session
+        .get({ sessionID: session.id })
+        .then((res) => res.data)
+        .catch(() => undefined),
+      serverSDK().client.session
+        .messages({ directory: session.directory, sessionID: session.id, limit: 10_000 })
+        .then((res) => res.data ?? [])
+        .catch(() => []),
+    ])
+
+    if (!sessionInfo) {
+      showToast({
+        title: "Session export failed",
+        description: "Session data is not available",
+        variant: "error",
+      })
+      return
+    }
+
+    const payload = {
+      info: sessionInfo,
+      messages: messagesData.map((message) => ({
+        info: message.info,
+        parts: message.parts,
+      })),
+    }
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement("a")
+    link.href = url
+    link.download = `session-${session.id}.json`
+    link.click()
+    URL.revokeObjectURL(url)
+    showToast({
+      title: "Session exported",
+      description: `Downloaded session-${session.id}.json`,
+      variant: "success",
+    })
   }
 
   command.register("layout", () => {
@@ -1073,6 +1001,20 @@ export default function LegacyLayout(props: ParentProps) {
         category: language.t("command.category.session"),
         keybind: "alt+arrowdown",
         onSelect: () => navigateSessionByOffset(1),
+      },
+      {
+        id: "session.previous.unseen",
+        title: language.t("command.session.previous.unseen"),
+        category: language.t("command.category.session"),
+        keybind: "shift+alt+arrowup",
+        onSelect: () => navigateSessionByUnseen(-1),
+      },
+      {
+        id: "session.next.unseen",
+        title: language.t("command.session.next.unseen"),
+        category: language.t("command.category.session"),
+        keybind: "shift+alt+arrowdown",
+        onSelect: () => navigateSessionByUnseen(1),
       },
       {
         id: "session.archive",
@@ -1489,63 +1431,7 @@ export default function LegacyLayout(props: ParentProps) {
     })
   }
 
-  const errorMessage = (err: unknown) => {
-    if (err && typeof err === "object" && "data" in err) {
-      const data = (err as { data?: { message?: string } }).data
-      if (data?.message) return data.message
-    }
-    if (err instanceof Error) return err.message
-    return language.t("common.requestFailed")
-  }
-
-  const downloadJson = (payload: unknown, filename: string) => {
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" })
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement("a")
-    link.href = url
-    link.download = filename
-    link.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const exportSession = async (session: Session) => {
-    const [sessionInfo, messagesData] = await Promise.all([
-      globalSDK.client.session
-        .get({ sessionID: session.id })
-        .then((res) => res.data)
-        .catch(() => undefined),
-      globalSDK.client.session
-        .messages({ directory: session.directory, sessionID: session.id, limit: 10_000 })
-        .then((res) => res.data ?? [])
-        .catch(() => []),
-    ])
-
-    if (!sessionInfo) {
-      showToast({
-        title: "Session export failed",
-        description: "Session data is not available",
-        variant: "error",
-      })
-      return
-    }
-
-    const payload = {
-      info: sessionInfo,
-      messages: messagesData.map((message) => ({
-        info: message.info,
-        parts: message.parts,
-      })),
-    }
-
-    downloadJson(payload, `session-${session.id}.json`)
-    showToast({
-      title: "Session exported",
-      description: `Downloaded session-${session.id}.json`,
-      variant: "success",
-    })
-  }
-
-  const deleteWorkspace = async (root: string, directory: string) => {
+  const deleteWorkspace = async (root: string, directory: string, leaveDeletedWorkspace = false) => {
     if (directory === root) return
 
     const current = currentDir()
@@ -1681,33 +1567,6 @@ export default function LegacyLayout(props: ParentProps) {
         },
       ],
     })
-  }
-
-  function DialogDeleteSession(props: { session: Session }) {
-    const handleDelete = async () => {
-      await deleteSession(props.session)
-      dialog.close()
-    }
-
-    return (
-      <Dialog title={language.t("session.delete.title")} fit>
-        <div class="flex flex-col gap-4 pl-6 pr-2.5 pb-3">
-          <div class="flex flex-col gap-1">
-            <span class="text-14-regular text-text-strong">
-              {language.t("session.delete.confirm", { name: props.session.title })}
-            </span>
-          </div>
-          <div class="flex justify-end gap-2">
-            <Button variant="ghost" size="large" onClick={() => dialog.close()}>
-              {language.t("common.cancel")}
-            </Button>
-            <Button variant="primary" size="large" onClick={handleDelete}>
-              {language.t("session.delete.button")}
-            </Button>
-          </div>
-        </div>
-      </Dialog>
-    )
   }
 
   function DialogDeleteWorkspace(props: { root: string; directory: string }) {
@@ -2015,909 +1874,6 @@ export default function LegacyLayout(props: ParentProps) {
     setStore("activeWorkspace", undefined)
   }
 
-  const ProjectIcon = (props: { project: LocalProject; class?: string; notify?: boolean }): JSX.Element => {
-    const notification = useNotification()
-    const notifications = createMemo(() => notification.project.unseen(props.project.worktree))
-    const hasError = createMemo(() => notifications().some((n) => n.type === "error"))
-    const name = createMemo(() => props.project.name || getFilename(props.project.worktree))
-    const opencode = "4b0ea68d7af9a6031a7ffda7ad66e0cb83315750"
-
-    return (
-      <div class={`relative size-8 shrink-0 rounded ${props.class ?? ""}`}>
-        <div class="size-full rounded overflow-clip">
-          <Avatar
-            fallback={name()}
-            src={props.project.id === opencode ? "https://opencode.ai/favicon.svg" : props.project.icon?.override}
-            {...getAvatarColors(props.project.icon?.color)}
-            class="size-full rounded"
-            classList={{ "badge-mask": notifications().length > 0 && props.notify }}
-          />
-        </div>
-        <Show when={notifications().length > 0 && props.notify}>
-          <div
-            classList={{
-              "absolute top-px right-px size-1.5 rounded-full z-10": true,
-              "bg-icon-critical-base": hasError(),
-              "bg-text-interactive-base": !hasError(),
-            }}
-          />
-        </Show>
-      </div>
-    )
-  }
-
-  const SessionItem = (props: {
-    session: Session
-    slug: string
-    mobile?: boolean
-    dense?: boolean
-    popover?: boolean
-    children?: Map<string, string[]>
-  }): JSX.Element => {
-    const notification = useNotification()
-    const notifications = createMemo(() => notification.session.unseen(props.session.id))
-    const hasError = createMemo(() => notifications().some((n) => n.type === "error"))
-    const [sessionStore] = globalSync.child(props.session.directory)
-    const hasPermissions = createMemo(() => {
-      const permissions = sessionStore.permission?.[props.session.id] ?? []
-      if (permissions.length > 0) return true
-
-      const childIDs = props.children?.get(props.session.id)
-      if (childIDs) {
-        for (const id of childIDs) {
-          const childPermissions = sessionStore.permission?.[id] ?? []
-          if (childPermissions.length > 0) return true
-        }
-        return false
-      }
-
-      const childSessions = sessionStore.session.filter((s) => s.parentID === props.session.id)
-      for (const child of childSessions) {
-        const childPermissions = sessionStore.permission?.[child.id] ?? []
-        if (childPermissions.length > 0) return true
-      }
-      return false
-    })
-    const isWorking = createMemo(() => {
-      if (hasPermissions()) return false
-      const status = sessionStore.session_status[props.session.id]
-      return status?.type === "busy" || status?.type === "retry"
-    })
-
-    const tint = createMemo(() => {
-      const messages = sessionStore.message[props.session.id]
-      if (!messages) return undefined
-      const user = messages
-        .slice()
-        .reverse()
-        .find((m) => m.role === "user")
-      if (!user?.agent) return undefined
-
-      const agent = sessionStore.agent.find((a) => a.name === user.agent)
-      return agentColor(user.agent, agent?.color)
-    })
-
-    const hoverMessages = createMemo(() =>
-      sessionStore.message[props.session.id]?.filter((message) => message.role === "user"),
-    )
-    const hoverReady = createMemo(() => sessionStore.message[props.session.id] !== undefined)
-    const hoverAllowed = createMemo(() => !props.mobile && sidebarExpanded())
-    const hoverEnabled = createMemo(() => (props.popover ?? true) && hoverAllowed())
-    const isActive = createMemo(() => props.session.id === params.id)
-    const [menu, setMenu] = createStore({
-      open: false,
-      pendingRename: false,
-    })
-
-    const hoverPrefetch = { current: undefined as ReturnType<typeof setTimeout> | undefined }
-    const cancelHoverPrefetch = () => {
-      if (hoverPrefetch.current === undefined) return
-      clearTimeout(hoverPrefetch.current)
-      hoverPrefetch.current = undefined
-    }
-    const scheduleHoverPrefetch = () => {
-      if (hoverPrefetch.current !== undefined) return
-      hoverPrefetch.current = setTimeout(() => {
-        hoverPrefetch.current = undefined
-        prefetchSession(props.session)
-      }, 200)
-    }
-
-    onCleanup(cancelHoverPrefetch)
-
-    const [menu, setMenu] = createStore({
-      open: false,
-      pendingRename: false,
-    })
-
-    const messageLabel = (message: Message) => {
-      const parts = sessionStore.part[message.id] ?? []
-      const text = parts.find((part): part is TextPart => part?.type === "text" && !part.synthetic && !part.ignored)
-      return text?.text
-    }
-
-    const item = (
-      <A
-        href={`${props.slug}/session/${props.session.id}`}
-        class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none transition-[padding] ${menu.open ? "pr-7" : ""} group-hover/session:pr-7 group-focus-within/session:pr-7 group-active/session:pr-7 ${props.dense ? "py-0.5" : "py-1"}`}
-        onPointerEnter={scheduleHoverPrefetch}
-        onPointerLeave={cancelHoverPrefetch}
-        onMouseEnter={scheduleHoverPrefetch}
-        onMouseLeave={cancelHoverPrefetch}
-        onFocus={() => prefetchSession(props.session, "high")}
-        onClick={() => {
-          setState("hoverSession", undefined)
-          if (layout.sidebar.opened()) return
-          queueMicrotask(() => setState("hoverProject", undefined))
-        }}
-      >
-        <div class="flex items-center gap-1 w-full">
-          <div
-            class="shrink-0 size-6 flex items-center justify-center"
-            style={{ color: tint() ?? "var(--icon-interactive-base)" }}
-          >
-            <Switch fallback={<Icon name="dash" size="small" class="text-icon-weak" />}>
-              <Match when={isWorking()}>
-                <Spinner class="size-[15px]" />
-              </Match>
-              <Match when={hasPermissions()}>
-                <div class="size-1.5 rounded-full bg-surface-warning-strong" />
-              </Match>
-              <Match when={hasError()}>
-                <div class="size-1.5 rounded-full bg-text-diff-delete-base" />
-              </Match>
-              <Match when={notifications().length > 0}>
-                <div class="size-1.5 rounded-full bg-text-interactive-base" />
-              </Match>
-            </Switch>
-          </div>
-          <InlineEditor
-            id={`session:${props.session.id}`}
-            value={() => props.session.title}
-            onSave={(next) => renameSession(props.session, next)}
-            class="text-14-regular text-text-strong grow-1 min-w-0 overflow-hidden text-ellipsis truncate"
-            displayClass="text-14-regular text-text-strong grow-1 min-w-0 overflow-hidden text-ellipsis truncate"
-            stopPropagation
-          />
-          <Show when={props.session.summary}>
-            {(summary) => (
-              <div class="group-hover/session:hidden group-active/session:hidden group-focus-within/session:hidden">
-                <DiffChanges changes={summary()} />
-              </div>
-            )}
-          </Show>
-        </div>
-      </A>
-    )
-
-    return (
-      <div
-        data-session-id={props.session.id}
-        class="group/session relative w-full rounded-md cursor-default transition-colors pl-2 pr-3
-               hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[[data-expanded]]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active"
-      >
-        <Show
-          when={hoverEnabled()}
-          fallback={
-            <Tooltip placement={props.mobile ? "bottom" : "right"} value={props.session.title} gutter={10}>
-              {item}
-            </Tooltip>
-          }
-        >
-          <HoverCard
-            openDelay={1000}
-            closeDelay={sidebarHovering() ? 600 : 0}
-            placement="right-start"
-            gutter={16}
-            shift={-2}
-            trigger={item}
-            mount={!props.mobile ? state.nav : undefined}
-            open={state.hoverSession === props.session.id}
-            onOpenChange={(open) => setState("hoverSession", open ? props.session.id : undefined)}
-          >
-            <Show
-              when={hoverReady()}
-              fallback={<div class="text-12-regular text-text-weak">{language.t("session.messages.loading")}</div>}
-            >
-              <div class="overflow-y-auto max-h-72 h-full">
-                <MessageNav
-                  messages={hoverMessages() ?? []}
-                  current={undefined}
-                  getLabel={messageLabel}
-                  onMessageSelect={(message) => {
-                    if (!isActive()) {
-                      sessionStorage.setItem("opencode.pendingMessage", `${props.session.id}|${message.id}`)
-                      navigate(`${props.slug}/session/${props.session.id}`)
-                      return
-                    }
-                    window.history.replaceState(null, "", `#message-${message.id}`)
-                    window.dispatchEvent(new HashChangeEvent("hashchange"))
-                  }}
-                  size="normal"
-                  class="w-60"
-                />
-              </div>
-            </Show>
-          </HoverCard>
-        </Show>
-        <div
-          class={`absolute ${props.dense ? "top-0.5 right-0.5" : "top-1 right-1"} flex items-center gap-0.5 transition-opacity`}
-          classList={{
-            "opacity-100 pointer-events-auto": menu.open,
-            "opacity-0 pointer-events-none": !menu.open,
-            "group-hover/session:opacity-100 group-hover/session:pointer-events-auto": true,
-            "group-focus-within/session:opacity-100 group-focus-within/session:pointer-events-auto": true,
-          }}
-        >
-          <DropdownMenu modal={!sidebarHovering()} open={menu.open} onOpenChange={(open) => setMenu("open", open)}>
-            <Tooltip value={language.t("common.moreOptions")} placement="top">
-              <DropdownMenu.Trigger
-                as={IconButton}
-                icon="dot-grid"
-                variant="ghost"
-                class="size-6 rounded-md data-[expanded]:bg-surface-base-active"
-                aria-label={language.t("common.moreOptions")}
-              />
-            </Tooltip>
-            <DropdownMenu.Portal mount={!props.mobile ? state.nav : undefined}>
-              <DropdownMenu.Content
-                onCloseAutoFocus={(event) => {
-                  if (!menu.pendingRename) return
-                  event.preventDefault()
-                  setMenu("pendingRename", false)
-                  openEditor(`session:${props.session.id}`, props.session.title)
-                }}
-              >
-                <DropdownMenu.Item
-                  onSelect={() => {
-                    setMenu("pendingRename", true)
-                    setMenu("open", false)
-                  }}
-                >
-                  <DropdownMenu.ItemLabel>{language.t("common.rename")}</DropdownMenu.ItemLabel>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item onSelect={() => archiveSession(props.session)}>
-                  <DropdownMenu.ItemLabel>{language.t("common.archive")}</DropdownMenu.ItemLabel>
-                </DropdownMenu.Item>
-                <DropdownMenu.Item onSelect={() => exportSession(props.session)}>
-                  <DropdownMenu.ItemLabel>导出会话</DropdownMenu.ItemLabel>
-                </DropdownMenu.Item>
-                <DropdownMenu.Separator />
-                <DropdownMenu.Item onSelect={() => dialog.show(() => <DialogDeleteSession session={props.session} />)}>
-                  <DropdownMenu.ItemLabel>{language.t("common.delete")}</DropdownMenu.ItemLabel>
-                </DropdownMenu.Item>
-              </DropdownMenu.Content>
-            </DropdownMenu.Portal>
-          </DropdownMenu>
-        </div>
-      </div>
-    )
-  }
-
-  const NewSessionItem = (props: { slug: string; mobile?: boolean; dense?: boolean }): JSX.Element => {
-    const label = language.t("command.session.new")
-    const tooltip = () => props.mobile || !sidebarExpanded()
-    const item = (
-      <A
-        href={`${props.slug}/session`}
-        end
-        class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none ${props.dense ? "py-0.5" : "py-1"}`}
-        onClick={() => {
-          setState("hoverSession", undefined)
-          if (layout.sidebar.opened()) return
-          queueMicrotask(() => setState("hoverProject", undefined))
-        }}
-      >
-        <div class="flex items-center gap-1 w-full">
-          <div class="shrink-0 size-6 flex items-center justify-center">
-            <Icon name="plus-small" size="small" class="text-icon-weak" />
-          </div>
-          <span class="text-14-regular text-text-strong grow-1 min-w-0 overflow-hidden text-ellipsis truncate">
-            {label}
-          </span>
-        </div>
-      </A>
-    )
-
-    return (
-      <div class="group/session relative w-full rounded-md cursor-default transition-colors pl-2 pr-3 hover:bg-surface-raised-base-hover [&:has(:focus-visible)]:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active">
-        <Show
-          when={!tooltip()}
-          fallback={
-            <Tooltip placement={props.mobile ? "bottom" : "right"} value={label} gutter={10}>
-              {item}
-            </Tooltip>
-          }
-        >
-          {item}
-        </Show>
-      </div>
-    )
-  }
-
-  const ImportSessionItem = (props: { mobile?: boolean; dense?: boolean }): JSX.Element => {
-    const label = "导入会话"
-    const tooltip = () => props.mobile || !layout.sidebar.opened()
-    const item = (
-      <button
-        type="button"
-        class={`flex items-center justify-between gap-3 min-w-0 text-left w-full focus:outline-none ${
-          props.dense ? "py-0.5" : "py-1"
-        }`}
-        onClick={() => {
-          command.trigger("session.import")
-          setState("hoverSession", undefined)
-        }}
-      >
-        <div class="flex items-center gap-1 w-full">
-          <div class="shrink-0 size-6 flex items-center justify-center">
-            <Icon name="arrow-down-to-line" size="small" class="text-icon-weak" />
-          </div>
-          <span class="text-14-regular text-text-strong grow-1 min-w-0 overflow-hidden text-ellipsis truncate">
-            {label}
-          </span>
-        </div>
-      </button>
-    )
-
-    return (
-      <div class="group/session relative w-full rounded-md cursor-default transition-colors pl-2 pr-3 hover:bg-surface-raised-base-hover focus-within:bg-surface-raised-base-hover has-[.active]:bg-surface-base-active">
-        <Show
-          when={!tooltip()}
-          fallback={
-            <Tooltip placement={props.mobile ? "bottom" : "right"} value={label} gutter={10}>
-              {item}
-            </Tooltip>
-          }
-        >
-          {item}
-        </Show>
-      </div>
-    )
-  }
-
-  const SessionSkeleton = (props: { count?: number }): JSX.Element => {
-    const items = Array.from({ length: props.count ?? 4 }, (_, index) => index)
-    return (
-      <div class="flex flex-col gap-1">
-        <For each={items}>
-          {() => <div class="h-8 w-full rounded-md bg-surface-raised-base opacity-60 animate-pulse" />}
-        </For>
-      </div>
-    )
-  }
-
-  const ProjectDragOverlay = (): JSX.Element => {
-    const project = createMemo(() => layout.projects.list().find((p) => p.worktree === store.activeProject))
-    return (
-      <Show when={project()}>
-        {(p) => (
-          <div class="bg-background-base rounded-xl p-1">
-            <ProjectIcon project={p()} />
-          </div>
-        )}
-      </Show>
-    )
-  }
-
-  const WorkspaceDragOverlay = (): JSX.Element => {
-    const label = createMemo(() => {
-      const project = sidebarProject()
-      if (!project) return
-      const directory = store.activeWorkspace
-      if (!directory) return
-
-      const [workspaceStore] = globalSync.child(directory, { bootstrap: false })
-      const kind =
-        directory === project.worktree ? language.t("workspace.type.local") : language.t("workspace.type.sandbox")
-      const name = workspaceLabel(directory, workspaceStore.vcs?.branch, project.id)
-      return `${kind} : ${name}`
-    })
-
-    return (
-      <Show when={label()}>
-        {(value) => (
-          <div class="bg-background-base rounded-md px-2 py-1 text-14-medium text-text-strong">{value()}</div>
-        )}
-      </Show>
-    )
-  }
-
-  const SortableWorkspace = (props: { directory: string; project: LocalProject; mobile?: boolean }): JSX.Element => {
-    const sortable = createSortable(props.directory)
-    const [workspaceStore, setWorkspaceStore] = globalSync.child(props.directory, { bootstrap: false })
-    const [menu, setMenu] = createStore({
-      open: false,
-      pendingRename: false,
-    })
-    const slug = createMemo(() => base64Encode(props.directory))
-    const sessions = createMemo(() =>
-      workspaceStore.session
-        .filter((session) => session.directory === workspaceStore.path.directory)
-        .filter((session) => !session.parentID && !session.time?.archived)
-        .toSorted(sortSessions(Date.now())),
-    )
-    const children = createMemo(() => {
-      const map = new Map<string, string[]>()
-      for (const session of workspaceStore.session) {
-        if (!session.parentID) continue
-        const existing = map.get(session.parentID)
-        if (existing) {
-          existing.push(session.id)
-          continue
-        }
-        map.set(session.parentID, [session.id])
-      }
-      return map
-    })
-    const local = createMemo(() => props.directory === props.project.worktree)
-    const active = createMemo(() => {
-      const current = decode64(params.dir) ?? ""
-      return current === props.directory
-    })
-    const workspaceValue = createMemo(() => {
-      const branch = workspaceStore.vcs?.branch
-      const name = branch ?? getFilename(props.directory)
-      return workspaceName(props.directory, props.project.id, branch) ?? name
-    })
-    const open = createMemo(() => store.workspaceExpanded[props.directory] ?? local())
-    const boot = createMemo(() => open() || active())
-    const booted = createMemo((prev) => prev || workspaceStore.status === "complete", false)
-    const loading = createMemo(() => open() && !booted() && sessions().length === 0)
-    const hasMore = createMemo(() => workspaceStore.sessionTotal > sessions().length)
-    const busy = createMemo(() => isBusy(props.directory))
-    const loadMore = async () => {
-      setWorkspaceStore("limit", (limit) => limit + 5)
-      await globalSync.project.loadSessions(props.directory)
-    }
-
-    const workspaceEditActive = createMemo(() => editorOpen(`workspace:${props.directory}`))
-
-    const openWrapper = (value: boolean) => {
-      setStore("workspaceExpanded", props.directory, value)
-      if (value) return
-      if (editorOpen(`workspace:${props.directory}`)) closeEditor()
-    }
-
-    createEffect(() => {
-      if (!boot()) return
-      globalSync.child(props.directory, { bootstrap: true })
-    })
-
-    const header = () => (
-      <div class="flex items-center gap-1 min-w-0 flex-1">
-        <div class="flex items-center justify-center shrink-0 size-6">
-          <Show when={busy()} fallback={<Icon name="branch" size="small" />}>
-            <Spinner class="size-[15px]" />
-          </Show>
-        </div>
-        <span class="text-14-medium text-text-base shrink-0">
-          {local() ? language.t("workspace.type.local") : language.t("workspace.type.sandbox")} :
-        </span>
-        <Show
-          when={!local()}
-          fallback={
-            <span class="text-14-medium text-text-base min-w-0 truncate">
-              {workspaceStore.vcs?.branch ?? getFilename(props.directory)}
-            </span>
-          }
-        >
-          <InlineEditor
-            id={`workspace:${props.directory}`}
-            value={workspaceValue}
-            onSave={(next) => {
-              const trimmed = next.trim()
-              if (!trimmed) return
-              renameWorkspace(props.directory, trimmed, props.project.id, workspaceStore.vcs?.branch)
-              setEditor("value", workspaceValue())
-            }}
-            class="text-14-medium text-text-base min-w-0 truncate"
-            displayClass="text-14-medium text-text-base min-w-0 truncate"
-            editing={workspaceEditActive()}
-            stopPropagation={false}
-            openOnDblClick={false}
-          />
-        </Show>
-        <Icon
-          name={open() ? "chevron-down" : "chevron-right"}
-          size="small"
-          class="shrink-0 text-icon-base opacity-0 transition-opacity group-hover/workspace:opacity-100 group-focus-within/workspace:opacity-100"
-        />
-      </div>
-    )
-
-    return (
-      <div
-        // @ts-ignore
-        use:sortable
-        classList={{
-          "opacity-30": sortable.isActiveDraggable,
-          "opacity-50 pointer-events-none": busy(),
-        }}
-      >
-        <Collapsible variant="ghost" open={open()} class="shrink-0" onOpenChange={openWrapper}>
-          <div class="px-2 py-1">
-            <div
-              class="group/workspace relative"
-              data-component="workspace-item"
-              data-workspace={base64Encode(props.directory)}
-            >
-              <div class="flex items-center gap-1">
-                <Show
-                  when={workspaceEditActive()}
-                  fallback={
-                    <Collapsible.Trigger
-                      class="flex items-center justify-between w-full pl-2 pr-16 py-1.5 rounded-md hover:bg-surface-raised-base-hover"
-                      data-action="workspace-toggle"
-                      data-workspace={base64Encode(props.directory)}
-                    >
-                      {header()}
-                    </Collapsible.Trigger>
-                  }
-                >
-                  <div class="flex items-center justify-between w-full pl-2 pr-16 py-1.5 rounded-md">{header()}</div>
-                </Show>
-                <div
-                  class="absolute right-1 top-1/2 -translate-y-1/2 flex items-center gap-0.5 transition-opacity"
-                  classList={{
-                    "opacity-100 pointer-events-auto": menu.open,
-                    "opacity-0 pointer-events-none": !menu.open,
-                    "group-hover/workspace:opacity-100 group-hover/workspace:pointer-events-auto": true,
-                    "group-focus-within/workspace:opacity-100 group-focus-within/workspace:pointer-events-auto": true,
-                  }}
-                >
-                  <DropdownMenu
-                    modal={!sidebarHovering()}
-                    open={menu.open}
-                    onOpenChange={(open) => setMenu("open", open)}
-                  >
-                    <Tooltip value={language.t("common.moreOptions")} placement="top">
-                      <DropdownMenu.Trigger
-                        as={IconButton}
-                        icon="dot-grid"
-                        variant="ghost"
-                        class="size-6 rounded-md"
-                        data-action="workspace-menu"
-                        data-workspace={base64Encode(props.directory)}
-                        aria-label={language.t("common.moreOptions")}
-                      />
-                    </Tooltip>
-                    <DropdownMenu.Portal mount={!props.mobile ? state.nav : undefined}>
-                      <DropdownMenu.Content
-                        onCloseAutoFocus={(event) => {
-                          if (!menu.pendingRename) return
-                          event.preventDefault()
-                          setMenu("pendingRename", false)
-                          openEditor(`workspace:${props.directory}`, workspaceValue())
-                        }}
-                      >
-                        <DropdownMenu.Item
-                          disabled={local()}
-                          onSelect={() => {
-                            setMenu("pendingRename", true)
-                            setMenu("open", false)
-                          }}
-                        >
-                          <DropdownMenu.ItemLabel>{language.t("common.rename")}</DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          disabled={local() || busy()}
-                          onSelect={() =>
-                            dialog.show(() => (
-                              <DialogResetWorkspace root={props.project.worktree} directory={props.directory} />
-                            ))
-                          }
-                        >
-                          <DropdownMenu.ItemLabel>{language.t("common.reset")}</DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                        <DropdownMenu.Item
-                          disabled={local() || busy()}
-                          onSelect={() =>
-                            dialog.show(() => (
-                              <DialogDeleteWorkspace root={props.project.worktree} directory={props.directory} />
-                            ))
-                          }
-                        >
-                          <DropdownMenu.ItemLabel>{language.t("common.delete")}</DropdownMenu.ItemLabel>
-                        </DropdownMenu.Item>
-                      </DropdownMenu.Content>
-                    </DropdownMenu.Portal>
-                  </DropdownMenu>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <Collapsible.Content>
-            <nav class="flex flex-col gap-1 px-2">
-              <Show when={workspaceSetting()}>
-                <NewSessionItem slug={slug()} mobile={props.mobile} />
-                <ImportSessionItem mobile={props.mobile} />
-              </Show>
-              <Show when={loading()}>
-                <SessionSkeleton />
-              </Show>
-              <For each={sessions()}>
-                {(session) => (
-                  <SessionItem session={session} slug={slug()} mobile={props.mobile} children={children()} />
-                )}
-              </For>
-              <Show when={hasMore()}>
-                <div class="relative w-full py-1">
-                  <Button
-                    variant="ghost"
-                    class="flex w-full text-left justify-start text-14-regular text-text-weak pl-9 pr-10"
-                    size="large"
-                    onClick={(e: MouseEvent) => {
-                      loadMore()
-                      ;(e.currentTarget as HTMLButtonElement).blur()
-                    }}
-                  >
-                    {language.t("common.loadMore")}
-                  </Button>
-                </div>
-              </Show>
-            </nav>
-          </Collapsible.Content>
-        </Collapsible>
-      </div>
-    )
-  }
-
-  const SortableProject = (props: { project: LocalProject; mobile?: boolean }): JSX.Element => {
-    const sortable = createSortable(props.project.worktree)
-    const selected = createMemo(() => {
-      const current = decode64(params.dir) ?? ""
-      return props.project.worktree === current || props.project.sandboxes?.includes(current)
-    })
-
-    const workspaces = createMemo(() => workspaceIds(props.project).slice(0, 2))
-    const workspaceEnabled = createMemo(
-      () => props.project.vcs === "git" && layout.sidebar.workspaces(props.project.worktree)(),
-    )
-    const [open, setOpen] = createSignal(false)
-
-    const preview = createMemo(() => !props.mobile && layout.sidebar.opened())
-    const overlay = createMemo(() => !props.mobile && !layout.sidebar.opened())
-    const active = createMemo(() => (preview() ? open() : overlay() && state.hoverProject === props.project.worktree))
-
-    createEffect(() => {
-      if (preview()) return
-      if (!open()) return
-      setOpen(false)
-    })
-
-    const label = (directory: string) => {
-      const [data] = globalSync.child(directory, { bootstrap: false })
-      const kind =
-        directory === props.project.worktree ? language.t("workspace.type.local") : language.t("workspace.type.sandbox")
-      const name = workspaceLabel(directory, data.vcs?.branch, props.project.id)
-      return `${kind} : ${name}`
-    }
-
-    const sessions = (directory: string) => {
-      const [data] = globalSync.child(directory, { bootstrap: false })
-      const root = workspaceKey(directory)
-      return data.session
-        .filter((session) => workspaceKey(session.directory) === root)
-        .filter((session) => !session.parentID && !session.time?.archived)
-        .toSorted(sortSessions(Date.now()))
-        .slice(0, 2)
-    }
-
-    const projectSessions = () => {
-      const directory = props.project.worktree
-      const [data] = globalSync.child(directory, { bootstrap: false })
-      const root = workspaceKey(directory)
-      return data.session
-        .filter((session) => workspaceKey(session.directory) === root)
-        .filter((session) => !session.parentID && !session.time?.archived)
-        .toSorted(sortSessions(Date.now()))
-        .slice(0, 2)
-    }
-
-    const projectName = () => props.project.name || getFilename(props.project.worktree)
-    const trigger = (
-      <button
-        type="button"
-        aria-label={projectName()}
-        data-action="project-switch"
-        data-project={base64Encode(props.project.worktree)}
-        classList={{
-          "flex items-center justify-center size-10 p-1 rounded-lg overflow-hidden transition-colors cursor-default": true,
-          "bg-transparent border-2 border-icon-strong-base hover:bg-surface-base-hover": selected(),
-          "bg-transparent border border-transparent hover:bg-surface-base-hover hover:border-border-weak-base":
-            !selected() && !active(),
-          "bg-surface-base-hover border border-border-weak-base": !selected() && active(),
-        }}
-        onMouseEnter={() => {
-          if (!overlay()) return
-          globalSync.child(props.project.worktree)
-          setState("hoverProject", props.project.worktree)
-          setState("hoverSession", undefined)
-        }}
-        onFocus={() => {
-          if (!overlay()) return
-          globalSync.child(props.project.worktree)
-          setState("hoverProject", props.project.worktree)
-          setState("hoverSession", undefined)
-        }}
-        onClick={() => navigateToProject(props.project.worktree)}
-        onBlur={() => setOpen(false)}
-      >
-        <ProjectIcon project={props.project} notify />
-      </button>
-    )
-
-    return (
-      // @ts-ignore
-      <div use:sortable classList={{ "opacity-30": sortable.isActiveDraggable }}>
-        <Show when={preview()} fallback={trigger}>
-          <HoverCard
-            open={open()}
-            openDelay={0}
-            closeDelay={0}
-            placement="right-start"
-            gutter={6}
-            trigger={trigger}
-            onOpenChange={(value) => {
-              setOpen(value)
-              if (value) setState("hoverSession", undefined)
-            }}
-          >
-            <div class="-m-3 p-2 flex flex-col w-72">
-              <div class="px-4 pt-2 pb-1 flex items-center gap-2">
-                <div class="text-14-medium text-text-strong truncate grow">{displayName(props.project)}</div>
-                <Tooltip value={language.t("common.close")} placement="top" gutter={6}>
-                  <IconButton
-                    icon="circle-x"
-                    variant="ghost"
-                    class="shrink-0"
-                    data-action="project-close-hover"
-                    data-project={base64Encode(props.project.worktree)}
-                    aria-label={language.t("common.close")}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      setOpen(false)
-                      closeProject(props.project.worktree)
-                    }}
-                  />
-                </Tooltip>
-              </div>
-              <div class="px-4 pb-2 text-12-medium text-text-weak">{language.t("sidebar.project.recentSessions")}</div>
-              <div class="px-2 pb-2 flex flex-col gap-2">
-                <Show
-                  when={workspaceEnabled()}
-                  fallback={
-                    <For each={projectSessions()}>
-                      {(session) => (
-                        <SessionItem
-                          session={session}
-                          slug={base64Encode(props.project.worktree)}
-                          dense
-                          mobile={props.mobile}
-                          popover={false}
-                        />
-                      )}
-                    </For>
-                  }
-                >
-                  <For each={workspaces()}>
-                    {(directory) => (
-                      <div class="flex flex-col gap-1">
-                        <div class="px-2 py-0.5 flex items-center gap-1 min-w-0">
-                          <div class="shrink-0 size-6 flex items-center justify-center">
-                            <Icon name="branch" size="small" class="text-icon-base" />
-                          </div>
-                          <span class="truncate text-14-medium text-text-base">{label(directory)}</span>
-                        </div>
-                        <For each={sessions(directory)}>
-                          {(session) => (
-                            <SessionItem
-                              session={session}
-                              slug={base64Encode(directory)}
-                              dense
-                              mobile={props.mobile}
-                              popover={false}
-                            />
-                          )}
-                        </For>
-                      </div>
-                    )}
-                  </For>
-                </Show>
-              </div>
-              <div class="px-2 py-2 border-t border-border-weak-base">
-                <Button
-                  variant="ghost"
-                  class="flex w-full text-left justify-start text-text-base px-2 hover:bg-transparent active:bg-transparent"
-                  onClick={() => {
-                    layout.sidebar.open()
-                    setOpen(false)
-                    if (selected()) {
-                      return
-                    }
-                    navigateToProject(props.project.worktree)
-                  }}
-                >
-                  {language.t("sidebar.project.viewAllSessions")}
-                </Button>
-              </div>
-            </div>
-          </HoverCard>
-        </Show>
-      </div>
-    )
-  }
-
-  const LocalWorkspace = (props: { project: LocalProject; mobile?: boolean }): JSX.Element => {
-    const [workspaceStore, setWorkspaceStore] = globalSync.child(props.project.worktree)
-    const slug = createMemo(() => base64Encode(props.project.worktree))
-    const sessions = createMemo(() =>
-      workspaceStore.session
-        .filter((session) => session.directory === workspaceStore.path.directory)
-        .filter((session) => !session.parentID && !session.time?.archived)
-        .toSorted(sortSessions(Date.now())),
-    )
-    const children = createMemo(() => {
-      const map = new Map<string, string[]>()
-      for (const session of workspaceStore.session) {
-        if (!session.parentID) continue
-        const existing = map.get(session.parentID)
-        if (existing) {
-          existing.push(session.id)
-          continue
-        }
-        map.set(session.parentID, [session.id])
-      }
-      return map
-    })
-    const booted = createMemo((prev) => prev || workspaceStore.status === "complete", false)
-    const loading = createMemo(() => !booted() && sessions().length === 0)
-    const hasMore = createMemo(() => workspaceStore.sessionTotal > sessions().length)
-    const loadMore = async () => {
-      setWorkspaceStore("limit", (limit) => limit + 5)
-      await globalSync.project.loadSessions(props.project.worktree)
-    }
-
-    return (
-      <div
-        ref={(el) => {
-          if (!props.mobile) scrollContainerRef = el
-        }}
-        class="size-full flex flex-col py-2 overflow-y-auto no-scrollbar [overflow-anchor:none]"
-      >
-        <nav class="flex flex-col gap-1 px-2">
-          <Show when={workspaceSetting()}>
-            <NewSessionItem slug={slug()} mobile={props.mobile} />
-            <ImportSessionItem mobile={props.mobile} />
-          </Show>
-          <Show when={loading()}>
-            <SessionSkeleton />
-          </Show>
-          <For each={sessions()}>
-            {(session) => <SessionItem session={session} slug={slug()} mobile={props.mobile} children={children()} />}
-          </For>
-          <Show when={hasMore()}>
-            <div class="relative w-full py-1">
-              <Button
-                variant="ghost"
-                class="flex w-full text-left justify-start text-14-regular text-text-weak pl-9 pr-10"
-                size="large"
-                onClick={(e: MouseEvent) => {
-                  loadMore()
-                  ;(e.currentTarget as HTMLButtonElement).blur()
-                }}
-              >
-                {language.t("common.loadMore")}
-              </Button>
-            </div>
-          </Show>
-        </nav>
-      </div>
-    )
-  }
-
   const createWorkspace = async (project: LocalProject) => {
     clearSidebarHoverState()
     const created = await serverSDK()
@@ -3013,6 +1969,7 @@ export default function LegacyLayout(props: ParentProps) {
       clearHoverProjectSoon,
       prefetchSession,
       archiveSession,
+      exportSession,
     },
   }
 
@@ -3201,94 +2158,41 @@ export default function LegacyLayout(props: ParentProps) {
                   when={workspacesEnabled()}
                   fallback={
                     <>
-                      <div class="shrink-0 py-4 px-3">
-                        <TooltipKeybind
-                          title={language.t("command.session.new")}
-                          keybind={command.keybind("session.new")}
-                          placement="top"
-                        >
-                          <Button
-                            size="large"
-                            icon="plus-small"
-                            class="w-full"
-                            onClick={() => {
-                              if (!layout.sidebar.opened()) {
-                                setState("hoverSession", undefined)
-                                setState("hoverProject", undefined)
-                              }
-                              navigate(`/${base64Encode(p().worktree)}/session`)
-                              layout.mobileSidebar.hide()
-                            }}
-                          >
-                            {language.t("command.session.new")}
-                          </Button>
-                        </TooltipKeybind>
-                        <TooltipKeybind title="导入会话" keybind={command.keybind("session.import")} placement="top">
-                          <Button
-                            size="large"
-                            icon="arrow-down-to-line"
-                            class="w-full mt-2"
-                            onClick={() => command.trigger("session.import")}
-                          >
-                            导入会话
-                          </Button>
-                        </TooltipKeybind>
-                      </div>
-                      <div class="flex-1 min-h-0">
-                        <LocalWorkspace ctx={workspaceSidebarCtx} project={p()} mobile={panelProps.mobile} />
-                      </div>
-                    </>
-                  }
-                >
-                  <>
-                    <div class="px-3">
-                      <TooltipKeybind
-                        title={language.t("command.session.new")}
-                        keybind={command.keybind("session.new")}
-                        placement="top"
-                      >
+                      <div class="shrink-0 py-4">
                         <Button
                           size="large"
-                          icon="plus-small"
-                          class="w-full mb-2"
+                          class="w-full"
                           onClick={() => {
-                            if (!layout.sidebar.opened()) {
-                              setState("hoverSession", undefined)
-                              setState("hoverProject", undefined)
-                            }
-                            navigate(`/${base64Encode(p().worktree)}/session`)
-                            layout.mobileSidebar.hide()
+                            const dir = worktree()
+                            if (!dir) return
+                            navigateWithSidebarReset(`/${base64Encode(dir)}/session`)
                           }}
                         >
                           <IconV2 name="edit" size="small" />
                           {language.t("command.session.new")}
                         </Button>
-                      </TooltipKeybind>
-                      <TooltipKeybind title="导入会话" keybind={command.keybind("session.import")} placement="top">
-                        <Button
-                          size="large"
-                          icon="arrow-down-to-line"
-                          class="w-full"
-                          onClick={() => command.trigger("session.import")}
-                        >
-                          导入会话
-                        </Button>
-                      </TooltipKeybind>
-                    </div>
-                    <div class="flex-1 min-h-0">
-                      <LocalWorkspace project={p} mobile={panelProps.mobile} />
-                    </div>
-                  </>
-                }
-              >
-                <>
-                  <div class="py-4 px-3">
-                    <TooltipKeybind
-                      title={language.t("workspace.new")}
-                      keybind={command.keybind("workspace.new")}
-                      placement="top"
-                    >
-                      <Button size="large" icon="plus-small" class="w-full" onClick={() => createWorkspace(p)}>
+                      </div>
+                      <div class="flex-1 min-h-0">
+                        <LocalWorkspace
+                          ctx={workspaceSidebarCtx}
+                          project={project}
+                          sortNow={sortNow}
+                          mobile={panelProps.mobile}
+                        />
+                      </div>
+                    </>
+                  }
+                >
+                  <>
+                    <div class="shrink-0 py-4">
+                      <Button
+                        size="large"
+                        icon="plus-small"
+                        class="w-full"
+                        onClick={() => {
+                          void createWorkspace(project)
+                        }}
+                      >
                         {language.t("workspace.new")}
                       </Button>
                     </div>

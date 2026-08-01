@@ -23,17 +23,28 @@ export interface Settings {
   general: {
     autoSave: boolean
     releaseNotes: boolean
+    followup: "queue" | "steer"
+    showFileTree: boolean
+    showNavigation: boolean
+    showSearch: boolean
+    showStatus: boolean
+    showTerminal: boolean
     showReasoningSummaries: boolean
     shellToolPartsExpanded: boolean
     editToolPartsExpanded: boolean
-  }
-  updates: {
-    startup: boolean
+    showCustomAgents: boolean
+    mobileTitlebarPosition: "top" | "bottom"
+    newLayoutDesigns?: boolean
+    layoutTransitionEligible?: boolean
+    agentVisibilityInitialized?: boolean
+    newInterfaceNoticeDismissed?: boolean
+    shouldDisplayTabsToast?: boolean
   }
   appearance: {
     fontSize: number
-    fontScale: number
-    font: string
+    mono: string
+    sans: string
+    terminal: string
   }
   keybinds: Record<string, string>
   permissions: {
@@ -173,17 +184,23 @@ const defaultSettings: Settings = {
   general: {
     autoSave: true,
     releaseNotes: true,
+    followup: "steer",
+    showFileTree: false,
+    showNavigation: false,
+    showSearch: false,
+    showStatus: false,
+    showTerminal: false,
     showReasoningSummaries: false,
-    shellToolPartsExpanded: true,
+    shellToolPartsExpanded: false,
     editToolPartsExpanded: false,
-  },
-  updates: {
-    startup: true,
+    showCustomAgents: false,
+    mobileTitlebarPosition: "top",
   },
   appearance: {
     fontSize: 14,
-    fontScale: 1,
-    font: "ibm-plex-mono",
+    mono: "",
+    sans: "",
+    terminal: "",
   },
   keybinds: {},
   permissions: {
@@ -204,28 +221,8 @@ const defaultSettings: Settings = {
   },
 }
 
-const monoFallback =
-  'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-
-const clampScale = (value: number) => Math.min(1.5, Math.max(0.85, value))
-
-const monoFonts: Record<string, string> = {
-  "ibm-plex-mono": `"IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "cascadia-code": `"Cascadia Code Nerd Font", "Cascadia Code NF", "Cascadia Mono NF", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "fira-code": `"Fira Code Nerd Font", "FiraMono Nerd Font", "FiraMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  hack: `"Hack Nerd Font", "Hack Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  inconsolata: `"Inconsolata Nerd Font", "Inconsolata Nerd Font Mono","IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "intel-one-mono": `"Intel One Mono Nerd Font", "IntoneMono Nerd Font", "IntoneMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  iosevka: `"Iosevka Nerd Font", "Iosevka Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "jetbrains-mono": `"JetBrains Mono Nerd Font", "JetBrainsMono Nerd Font Mono", "JetBrainsMonoNL Nerd Font", "JetBrainsMonoNL Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "meslo-lgs": `"Meslo LGS Nerd Font", "MesloLGS Nerd Font", "MesloLGM Nerd Font", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "roboto-mono": `"Roboto Mono Nerd Font", "RobotoMono Nerd Font", "RobotoMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "source-code-pro": `"Source Code Pro Nerd Font", "SauceCodePro Nerd Font", "SauceCodePro Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-  "ubuntu-mono": `"Ubuntu Mono Nerd Font", "UbuntuMono Nerd Font", "UbuntuMono Nerd Font Mono", "IBM Plex Mono", "IBM Plex Mono Fallback", ${monoFallback}`,
-}
-
-export function monoFontFamily(font: string | undefined) {
-  return monoFonts[font ?? defaultSettings.appearance.font] ?? monoFonts[defaultSettings.appearance.font]
+function withFallback<T>(read: () => T | undefined, fallback: T) {
+  return createMemo(() => read() ?? fallback)
 }
 
 export const { use: useSettings, provider: SettingsProvider } = createSimpleContext({
@@ -358,16 +355,6 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       setStore("general", "followup", "steer")
     })
 
-    createEffect(() => {
-      if (typeof document === "undefined") return
-      const scale = clampScale(store.appearance?.fontScale ?? defaultSettings.appearance.fontScale)
-      document.documentElement.style.setProperty("--font-scale", scale.toString())
-      document.documentElement.style.setProperty("--font-size-small", `${13 * scale}px`)
-      document.documentElement.style.setProperty("--font-size-base", `${14 * scale}px`)
-      document.documentElement.style.setProperty("--font-size-large", `${16 * scale}px`)
-      document.documentElement.style.setProperty("--font-size-x-large", `${20 * scale}px`)
-    })
-
     return {
       ready,
       get current() {
@@ -382,29 +369,87 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setReleaseNotes(value: boolean) {
           setStore("general", "releaseNotes", value)
         },
-        showReasoningSummaries: createMemo(
-          () => store.general?.showReasoningSummaries ?? defaultSettings.general.showReasoningSummaries,
+        followup: withFallback(
+          () => (store.general?.followup === "queue" ? "steer" : store.general?.followup),
+          defaultSettings.general.followup,
+        ),
+        setFollowup(value: "queue" | "steer") {
+          setStore("general", "followup", value === "queue" ? "steer" : value)
+        },
+        showFileTree,
+        setShowFileTree(value: boolean) {
+          setStore("general", "showFileTree", value)
+        },
+        showNavigation: withFallback(() => store.general?.showNavigation, defaultSettings.general.showNavigation),
+        setShowNavigation(value: boolean) {
+          setStore("general", "showNavigation", value)
+        },
+        showSearch,
+        setShowSearch(value: boolean) {
+          setStore("general", "showSearch", value)
+        },
+        showStatus,
+        setShowStatus(value: boolean) {
+          setStore("general", "showStatus", value)
+        },
+        showTerminal: withFallback(() => store.general?.showTerminal, defaultSettings.general.showTerminal),
+        setShowTerminal(value: boolean) {
+          setStore("general", "showTerminal", value)
+        },
+        showReasoningSummaries: withFallback(
+          () => store.general?.showReasoningSummaries,
+          defaultSettings.general.showReasoningSummaries,
         ),
         setShowReasoningSummaries(value: boolean) {
           setStore("general", "showReasoningSummaries", value)
         },
-        shellToolPartsExpanded: createMemo(
-          () => store.general?.shellToolPartsExpanded ?? defaultSettings.general.shellToolPartsExpanded,
+        shellToolPartsExpanded: withFallback(
+          () => store.general?.shellToolPartsExpanded,
+          defaultSettings.general.shellToolPartsExpanded,
         ),
         setShellToolPartsExpanded(value: boolean) {
           setStore("general", "shellToolPartsExpanded", value)
         },
-        editToolPartsExpanded: createMemo(
-          () => store.general?.editToolPartsExpanded ?? defaultSettings.general.editToolPartsExpanded,
+        editToolPartsExpanded: withFallback(
+          () => store.general?.editToolPartsExpanded,
+          defaultSettings.general.editToolPartsExpanded,
         ),
         setEditToolPartsExpanded(value: boolean) {
           setStore("general", "editToolPartsExpanded", value)
         },
-      },
-      updates: {
-        startup: createMemo(() => store.updates?.startup ?? defaultSettings.updates.startup),
-        setStartup(value: boolean) {
-          setStore("updates", "startup", value)
+        showCustomAgents,
+        setShowCustomAgents(value: boolean) {
+          setStore("general", "showCustomAgents", value)
+        },
+        mobileTitlebarPosition: withFallback(
+          () => store.general?.mobileTitlebarPosition,
+          defaultSettings.general.mobileTitlebarPosition,
+        ),
+        setMobileTitlebarPosition(value: "top" | "bottom") {
+          setStore("general", "mobileTitlebarPosition", value)
+        },
+        newLayoutDesigns,
+        setNewLayoutDesigns(value: boolean) {
+          const next = oldInterfaceRetired() ? true : value
+          if (newLayoutDesigns() === next) return
+          setStore("general", "newLayoutDesigns", next)
+          if (typeof window !== "undefined") setTimeout(() => window.location.reload())
+        },
+        layoutTransitionClassified,
+        setOldLayoutEligible(eligible: boolean) {
+          const current = store.general?.layoutTransitionEligible
+          if (typeof current === "boolean") return
+          setStore("general", "layoutTransitionEligible", eligible)
+        },
+        initializeAgentVisibility,
+        layoutTransitionAvailable: createMemo(() => ready() && layoutTransition().available),
+        newInterfaceNoticeVisible: createMemo(() => ready() && layoutTransition().notice),
+        dismissNewInterfaceNotice() {
+          setStore("general", "newInterfaceNoticeDismissed", true)
+        },
+        shouldDisplayTabsToast: withFallback(() => store.general?.shouldDisplayTabsToast, false),
+        dismissTabsToast() {
+          setStore("general", "shouldDisplayTabsToast", false)
         },
       },
       visibility: {
@@ -418,11 +463,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setFontSize(value: number) {
           setStore("appearance", "fontSize", value)
         },
-        fontScale: createMemo(() => store.appearance?.fontScale ?? defaultSettings.appearance.fontScale),
-        setFontScale(value: number) {
-          setStore("appearance", "fontScale", clampScale(value))
-        },
-        font: createMemo(() => store.appearance?.font ?? defaultSettings.appearance.font),
+        font: withFallback(() => store.appearance?.mono, defaultSettings.appearance.mono),
         setFont(value: string) {
           setStore("appearance", "mono", value.trim() ? value : "")
         },
@@ -473,29 +514,30 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         },
       },
       sounds: {
-        agentEnabled: createMemo(() => store.sounds?.agentEnabled ?? defaultSettings.sounds.agentEnabled),
+        agentEnabled: withFallback(() => store.sounds?.agentEnabled, defaultSettings.sounds.agentEnabled),
         setAgentEnabled(value: boolean) {
           setStore("sounds", "agentEnabled", value)
         },
-        agent: createMemo(() => store.sounds?.agent ?? defaultSettings.sounds.agent),
+        agent: withFallback(() => store.sounds?.agent, defaultSettings.sounds.agent),
         setAgent(value: string) {
           setStore("sounds", "agent", value)
         },
-        permissionsEnabled: createMemo(
-          () => store.sounds?.permissionsEnabled ?? defaultSettings.sounds.permissionsEnabled,
+        permissionsEnabled: withFallback(
+          () => store.sounds?.permissionsEnabled,
+          defaultSettings.sounds.permissionsEnabled,
         ),
         setPermissionsEnabled(value: boolean) {
           setStore("sounds", "permissionsEnabled", value)
         },
-        permissions: createMemo(() => store.sounds?.permissions ?? defaultSettings.sounds.permissions),
+        permissions: withFallback(() => store.sounds?.permissions, defaultSettings.sounds.permissions),
         setPermissions(value: string) {
           setStore("sounds", "permissions", value)
         },
-        errorsEnabled: createMemo(() => store.sounds?.errorsEnabled ?? defaultSettings.sounds.errorsEnabled),
+        errorsEnabled: withFallback(() => store.sounds?.errorsEnabled, defaultSettings.sounds.errorsEnabled),
         setErrorsEnabled(value: boolean) {
           setStore("sounds", "errorsEnabled", value)
         },
-        errors: createMemo(() => store.sounds?.errors ?? defaultSettings.sounds.errors),
+        errors: withFallback(() => store.sounds?.errors, defaultSettings.sounds.errors),
         setErrors(value: string) {
           setStore("sounds", "errors", value)
         },

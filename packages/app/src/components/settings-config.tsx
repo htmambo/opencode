@@ -5,7 +5,7 @@ import { showToast } from "@opencode-ai/ui/toast"
 import { For, Show, createEffect, createMemo, type Component, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import type { Config } from "@opencode-ai/sdk/v2/client"
-import { useGlobalSync } from "@/context/global-sync"
+import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 
 type JsonPrimitive = string | number | boolean | null
@@ -102,10 +102,10 @@ const defaultFor = (value: Json | undefined): Json => {
 }
 
 export const SettingsConfig: Component = () => {
-  const globalSync = useGlobalSync()
+  const sync = useServerSync()
   const language = useLanguage()
 
-  const serverConfig = createMemo(() => toRecord(globalSync.data.config))
+  const serverConfig = createMemo(() => toRecord(sync().data.config))
   const serverSignature = createMemo(() => JSON.stringify(serverConfig()))
   const serverJson = createMemo(() => formatJson(serverConfig()))
 
@@ -271,10 +271,10 @@ export const SettingsConfig: Component = () => {
   const updateConfig = (next: JsonRecord) => {
     setStore("saving", true)
 
-    globalSync
+    sync()
       .updateConfig(next as Config)
       .then(() => {
-        globalSync.set("config", next as Config)
+        sync().set("config", next as Config)
         setStore({
           config: next,
           json: formatJson(next),
