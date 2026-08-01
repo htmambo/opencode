@@ -166,7 +166,6 @@ export const getTabReorderIndex = (tabs: readonly string[], from: string, to: st
   return toIndex
 }
 
-<<<<<<< HEAD
 export const createSizing = () => {
   const [state, setState] = createStore({ active: false })
   let t: number | undefined
@@ -212,4 +211,3 @@ export type Sizing = ReturnType<typeof createSizing>
 export const combineCommandSections = <T>(sections: readonly T[][]) => {
   return sections.flatMap((section) => section)
 }
->>>>>>> 482d213a1 (Fix missing session imports)
